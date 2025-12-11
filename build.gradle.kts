@@ -7,6 +7,13 @@ plugins {
 	id("io.spring.dependency-management") version "1.1.7"
 }
 
+allOpen {
+    // 아래 어노테이션들이 붙은 클래스를 모두 'open' 으로 설정
+    annotation("jakarta.persistence.Entity")
+    annotation("jakarta.persistence.MappedSuperclass")
+    annotation("jakarta.persistence.Embeddable")
+}
+
 fun getGitHash(): String {
 	return providers.exec {
 		commandLine("git", "rev-parse", "--short", "HEAD")
