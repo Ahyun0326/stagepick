@@ -64,6 +64,9 @@ dependencies {
     // DB
 	runtimeOnly("com.mysql:mysql-connector-j")
 
+    // Logging
+    implementation("io.github.oshai:kotlin-logging-jvm:7.0.13")
+
     // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("org.springframework.boot:spring-boot-testcontainers")
