@@ -5,6 +5,7 @@ package kr.hhplus.be.server.common.advice
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kr.hhplus.be.server.common.exception.ConcertNotFoundException
 import kr.hhplus.be.server.common.exception.ErrorCode
+import kr.hhplus.be.server.common.exception.ScheduleNotFoundException
 import kr.hhplus.be.server.common.response.ApiErrorResponse
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -33,6 +34,15 @@ class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
     @ExceptionHandler(ConcertNotFoundException::class)
     fun handleConcertNotFoundException(e: ConcertNotFoundException): ResponseEntity<ApiErrorResponse> {
         logger.error(e) { "Handle CustomNotFoundException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
+
+    @ExceptionHandler(ScheduleNotFoundException::class)
+    fun handleScheduleNotFoundException(e: ScheduleNotFoundException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle ScheduleNotFoundException $e" }
 
         return ResponseEntity
             .status(e.errorCode.status)

@@ -12,7 +12,7 @@ import jakarta.persistence.JoinColumn
 import jakarta.persistence.ManyToOne
 import jakarta.persistence.Table
 import kr.hhplus.be.server.common.jpa.BaseEntity
-import kr.hhplus.be.server.domains.reservation.domain.Reservation
+import kr.hhplus.be.server.domains.reservation.infrastructure.persistence.ReservationEntity
 import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 import java.time.LocalDateTime
@@ -23,7 +23,7 @@ import java.time.LocalDateTime
     Index(name = "idx_number", columnList = "number")
 ])
 class Payment(
-    reservation: Reservation
+    reservation: ReservationEntity
 ) : BaseEntity() {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -31,7 +31,7 @@ class Payment(
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reservation_id")
-    var reservation: Reservation = reservation
+    var reservation: ReservationEntity = reservation
         protected set
     
     @Column(nullable = false, unique = true, length = 20)

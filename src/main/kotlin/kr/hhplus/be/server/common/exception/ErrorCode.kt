@@ -14,4 +14,7 @@ enum class ErrorCode(
     // 콘서트 도메인 에러
     CONCERT_NOT_FOUND(HttpStatus.NOT_FOUND, 2001, "요청하신 콘서트 정보를 찾을 수 없습니다."),
 
+    // 스케줄 도메인 에러
+    SCHEDULE_NOT_FOUND(HttpStatus.NOT_FOUND, 3001, "존재하지 않는 공연 회차입니다."),
+
 }

@@ -1,4 +1,4 @@
-package kr.hhplus.be.server.domains.seat.domain
+package kr.hhplus.be.server.domains.seat.infrastructure.persistence
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
@@ -12,8 +12,9 @@ import jakarta.persistence.ManyToOne
 import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
 import kr.hhplus.be.server.common.jpa.BaseEntity
-import kr.hhplus.be.server.domains.reservation.domain.Reservation
+import kr.hhplus.be.server.domains.reservation.infrastructure.persistence.ReservationEntity
 import kr.hhplus.be.server.domains.schedule.domain.model.Schedule
+import kr.hhplus.be.server.domains.seat.domain.model.SeatStatus
 import org.hibernate.annotations.OnDelete
 import org.hibernate.annotations.OnDeleteAction
 
@@ -30,16 +31,17 @@ import org.hibernate.annotations.OnDeleteAction
         Index(name = "idx_reservation_id", columnList = "reservation_id")
     ]
 )
-class Seat(
+class SeatEntity(
     schedule: Schedule,
-    reservation: Reservation? = null,
+    reservation: ReservationEntity? = null,
     number: String,
     status: String = SeatStatus.AVAILABLE.name,
     price: Int
 ) : BaseEntity() {
 
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0L
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "schedule_id")
@@ -50,7 +52,7 @@ class Seat(
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reservation_id")
     @OnDelete(action = OnDeleteAction.SET_NULL)
-    var reservation: Reservation? = reservation
+    var reservation: ReservationEntity? = reservation
         protected set
 
     @Column(nullable = false, length = 10)
@@ -64,4 +66,6 @@ class Seat(
     @Column(nullable = false)
     var price: Int = price
         protected set
+
 }
+

@@ -1,4 +1,4 @@
-package kr.hhplus.be.server.domains.seat.domain
+package kr.hhplus.be.server.domains.seat.domain.model
 
 enum class SeatStatus(
     val value: String
