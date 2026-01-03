@@ -1,4 +1,4 @@
-package kr.hhplus.be.server.domains.concert.presentation
+package kr.hhplus.be.server.domains.concert.presentation.web
 
 import kr.hhplus.be.server.common.response.ApiResponse
 import kr.hhplus.be.server.domains.concert.application.ConcertService
@@ -17,16 +17,16 @@ class ConcertController(
 ) {
     @GetMapping
     fun findConcerts(): ApiResponse<ConcertListResponse> {
-        return ApiResponse.success(concertService.findConcerts())
+        return ApiResponse.Companion.success(concertService.findConcerts())
     }
 
     @GetMapping("/{concertId}")
     fun getConcertDetail(@PathVariable concertId: Long): ApiResponse<ConcertDetailResponse> {
-        return ApiResponse.success(concertService.getConcertDetail(concertId))
+        return ApiResponse.Companion.success(concertService.getConcertDetail(concertId))
     }
 
     @GetMapping("/{concertId}/schedules")
     fun findAvailableConcerts(@PathVariable concertId: Long): ApiResponse<ConcertSchedulesResponse> {
-        return ApiResponse.success(concertService.findAvailableConcerts(concertId))
+        return ApiResponse.Companion.success(concertService.findAvailableConcerts(concertId))
     }
 }

@@ -9,11 +9,11 @@ data class SeatInfo(
     val price: Int
 ) {
     companion object {
-        fun from(seat: Seat): SeatInfo {
+        fun of(seat: Seat, status: String): SeatInfo {
             return SeatInfo(
                 seat.id,
                 seat.number,
-                seat.status,
+                status,
                 seat.price
             )
         }

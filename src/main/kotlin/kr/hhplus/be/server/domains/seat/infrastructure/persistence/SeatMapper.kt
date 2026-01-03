@@ -10,7 +10,6 @@ class SeatMapper {
         return Seat(
             id = entity.id,
             scheduleId = entity.schedule.id,
-            reservationId = entity.reservation?.id,
             number = entity.number,
             status = entity.status,
             price = entity.price

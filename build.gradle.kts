@@ -63,7 +63,10 @@ dependencies {
 
     // DB
 	runtimeOnly("com.mysql:mysql-connector-j")
+    // 분산락
     implementation("org.redisson:redisson-spring-boot-starter:3.52.0")
+    // Redis 기본 라이브러리
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
     // Logging
     implementation("io.github.oshai:kotlin-logging-jvm:7.0.13")

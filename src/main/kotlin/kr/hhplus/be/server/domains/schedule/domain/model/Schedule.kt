@@ -18,7 +18,7 @@ import java.time.LocalDateTime
 
 @Entity
 @Table(
-    name = "schedule", indexes = [
+    name = "schedules", indexes = [
         Index(
             name = "idx_concert_id_concerted_at",
             columnList = "concert_id, concerted_at"
@@ -31,6 +31,7 @@ class Schedule(
 ) : BaseEntity() {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "schedule_id")
     val id: Long = 0L
 
     @ManyToOne(fetch = FetchType.LAZY)

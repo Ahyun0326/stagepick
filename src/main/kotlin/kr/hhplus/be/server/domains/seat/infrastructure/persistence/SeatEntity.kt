@@ -12,8 +12,8 @@ import jakarta.persistence.ManyToOne
 import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
 import kr.hhplus.be.server.common.jpa.BaseEntity
-import kr.hhplus.be.server.domains.reservation.infrastructure.persistence.ReservationEntity
 import kr.hhplus.be.server.domains.schedule.domain.model.Schedule
+import kr.hhplus.be.server.domains.seat.domain.model.Seat
 import kr.hhplus.be.server.domains.seat.domain.model.SeatStatus
 import org.hibernate.annotations.OnDelete
 import org.hibernate.annotations.OnDeleteAction
@@ -33,7 +33,6 @@ import org.hibernate.annotations.OnDeleteAction
 )
 class SeatEntity(
     schedule: Schedule,
-    reservation: ReservationEntity? = null,
     number: String,
     status: String = SeatStatus.AVAILABLE.name,
     price: Int
@@ -49,10 +48,9 @@ class SeatEntity(
     var schedule: Schedule = schedule
         protected set
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "reservation_id")
+    @Column(name = "reservation_id")
     @OnDelete(action = OnDeleteAction.SET_NULL)
-    var reservation: ReservationEntity? = reservation
+    var reservationId: Long? = null
         protected set
 
     @Column(nullable = false, length = 10)
@@ -67,5 +65,9 @@ class SeatEntity(
     var price: Int = price
         protected set
 
+    fun updateFrom(seat: Seat) {
+        status = seat.status
+        reservationId = seat.reservationId
+    }
 }
 

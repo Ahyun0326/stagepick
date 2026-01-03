@@ -17,4 +17,8 @@ enum class ErrorCode(
     // 스케줄 도메인 에러
     SCHEDULE_NOT_FOUND(HttpStatus.NOT_FOUND, 3001, "존재하지 않는 공연 회차입니다."),
 
+    // 좌석 도메인 에러
+    SEAT_NOT_FOUND(HttpStatus.NOT_FOUND, 4001, "존재하지 않는 좌석 정보입니다."),
+    SEAT_UNAVAILABLE(HttpStatus.CONFLICT, 4002, "이용 불가능한 좌석입니다."),
+
 }
