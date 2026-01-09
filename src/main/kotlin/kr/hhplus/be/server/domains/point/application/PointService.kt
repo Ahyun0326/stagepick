@@ -1,6 +1,7 @@
 package kr.hhplus.be.server.domains.point.application
 
 import kr.hhplus.be.server.domains.point.application.dto.request.ChargePointRequest
+import kr.hhplus.be.server.domains.point.application.dto.response.PointResponse
 import kr.hhplus.be.server.domains.point.application.validator.PointValidator
 import kr.hhplus.be.server.domains.point.domain.model.Point
 import kr.hhplus.be.server.domains.point.domain.model.PointHistory
@@ -45,5 +46,13 @@ class PointService(
                 PointHistoryType.CHARGE.name
             )
         )
+    }
+
+    fun findPoint(): PointResponse {
+        val memberId = 1L
+        val point = pointRepository.findPointByMemberId(memberId)
+            .orElseGet { Point(memberId, 0) }
+
+        return PointResponse.from(point)
     }
 }
