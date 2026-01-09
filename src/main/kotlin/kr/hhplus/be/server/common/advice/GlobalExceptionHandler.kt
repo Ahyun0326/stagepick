@@ -5,6 +5,7 @@ package kr.hhplus.be.server.common.advice
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kr.hhplus.be.server.common.exception.ConcertNotFoundException
 import kr.hhplus.be.server.common.exception.ErrorCode
+import kr.hhplus.be.server.common.exception.NegativePointException
 import kr.hhplus.be.server.common.exception.ScheduleNotFoundException
 import kr.hhplus.be.server.common.exception.SeatNotFoundException
 import kr.hhplus.be.server.common.exception.SeatUnavailableException
@@ -67,6 +68,15 @@ class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
         return ResponseEntity
             .status(e.errorCode.status)
             .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message, e.invalidSeatIds))
+    }
+
+    @ExceptionHandler(NegativePointException::class)
+    fun handleNegativePointException(e: NegativePointException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle NegativePointException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
     }
 
 }

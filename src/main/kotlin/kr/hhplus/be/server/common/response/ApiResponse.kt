@@ -2,7 +2,7 @@ package kr.hhplus.be.server.common.response
 
 import org.springframework.http.HttpStatus
 
-data class ApiResponse<T>(
+class ApiResponse<T>(
     val success: Boolean = true,
     val code: Int = HttpStatus.OK.value(),
     val message: String,

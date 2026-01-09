@@ -21,4 +21,7 @@ enum class ErrorCode(
     SEAT_NOT_FOUND(HttpStatus.NOT_FOUND, 4001, "존재하지 않는 좌석 정보입니다."),
     SEAT_UNAVAILABLE(HttpStatus.CONFLICT, 4002, "이용 불가능한 좌석입니다."),
 
+    // 포인트 도메인 에러
+    NEGATIVE_POINT(HttpStatus.CONFLICT, 5001, "충전 금액은 0보다 커야 합니다.")
+
 }

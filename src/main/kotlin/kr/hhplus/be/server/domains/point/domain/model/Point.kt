@@ -1,4 +1,4 @@
-package kr.hhplus.be.server.domains.point.domain
+package kr.hhplus.be.server.domains.point.domain.model
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
@@ -17,23 +17,34 @@ import org.hibernate.annotations.OnDeleteAction
 
 @Entity
 @Table(
-    name = "point", indexes = [
+    name = "point",
+    indexes = [
         Index(name = "idx_member_id", columnList = "member_id")
     ]
 )
 class Point(
-    member: Member
+    memberId: Long,
+    point: Int
 ) : BaseEntity() {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "member_id")
-    @OnDelete(action = OnDeleteAction.CASCADE)
-    var member: Member = member
+//    @ManyToOne(fetch = FetchType.LAZY)
+//    @JoinColumn(name = "member_id")
+//    @OnDelete(action = OnDeleteAction.CASCADE)
+//    var member: Member = member
+//        protected set
+
+    var memberId: Long = memberId
         protected set
 
     @Column(nullable = false)
-    var point: Int? = null
+    var point: Int = point
+        protected set
+
+    fun chargePoint(amount: Int): Int {
+        point += amount
+        return point
+    }
 }
