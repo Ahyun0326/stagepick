@@ -1,54 +1,20 @@
 package kr.hhplus.be.server.domains.point.domain.model
 
-import jakarta.persistence.Column
-import jakarta.persistence.Entity
-import jakarta.persistence.FetchType
-import jakarta.persistence.GeneratedValue
-import jakarta.persistence.GenerationType
-import jakarta.persistence.Id
-import jakarta.persistence.Index
-import jakarta.persistence.JoinColumn
-import jakarta.persistence.ManyToOne
-import jakarta.persistence.Table
-import kr.hhplus.be.server.common.jpa.BaseEntity
-import kr.hhplus.be.server.domains.member.domain.Member
-
-@Entity
-@Table(
-    name = "point_history",
-    indexes = [
-        Index(
-            name = "idx_member_id_created_at",
-            columnList = "member_id, created_at"
-        )]
-)
 class PointHistory(
-    memberId: Long,
-    currentPoint: Int,
-    chargedPoint: Int,
-    type: String
-) : BaseEntity() {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null
-
-//    @ManyToOne(fetch = FetchType.LAZY)
-//    @JoinColumn(name = "member_id")
-//    var member: Member = member
-//        protected set
-
-    var memberId: Long = memberId
-        protected set
-
-    @Column(nullable = false)
-    var currentPoint: Int = currentPoint
-        protected set
-
-    @Column(nullable = false)
-    var chargedPoint: Int = chargedPoint
-        protected set
-
-    @Column(nullable = false, length = 10)
-    var type: String = type
-        protected set
+    val id: Long? = null,
+    val memberId: Long,
+    val currentPoint: Int,
+    val changedPoint: Int,
+    val type: String
+) {
+    companion object {
+        fun create(memberId: Long, remainPoint: Int, point: Int, type: PointHistoryType): PointHistory {
+            return PointHistory(
+                memberId = memberId,
+                currentPoint = remainPoint,
+                changedPoint = point,
+                type = type.name
+            )
+        }
+    }
 }
