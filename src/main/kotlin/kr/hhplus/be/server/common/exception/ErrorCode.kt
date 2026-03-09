@@ -24,6 +24,7 @@ enum class ErrorCode(
     // 포인트 도메인 에러
     NEGATIVE_POINT(HttpStatus.CONFLICT, 5001, "충전 금액은 0보다 커야 합니다."),
     INSUFFICIENT_POINT(HttpStatus.CONFLICT, 5002, "결제 포인트가 부족합니다."),
+    POINT_NOT_FOUND(HttpStatus.NOT_FOUND, 5003, "포인트 정보를 찾을 수 없습니다."),
 
     // 예약 도메인 에러
     RESERVATION_NOT_FOUND(HttpStatus.NOT_FOUND, 6001, "예약 정보를 찾을 수 없습니다."),
@@ -32,6 +33,7 @@ enum class ErrorCode(
 
     // 결제 도메인 에러
     PAYMENT_INFO_NOT_FOUND(HttpStatus.NOT_FOUND, 7001, "결제 정보를 찾을 수 없습니다."),
-    PAYMENT_AMOUNT_MATCH_EXCEPTION(HttpStatus.CONFLICT, 7002, "결제 요청 금액이 불일치합니다.")
+    PAYMENT_AMOUNT_MATCH_EXCEPTION(HttpStatus.CONFLICT, 7002, "결제 요청 금액이 불일치합니다."),
+    DUPLICATE_PAYMENT(HttpStatus.CONFLICT, 7003, "이미 결제가 완료된 예약입니다.")
 
 }

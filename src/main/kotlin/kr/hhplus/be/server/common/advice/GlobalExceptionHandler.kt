@@ -4,11 +4,13 @@ package kr.hhplus.be.server.common.advice
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kr.hhplus.be.server.common.exception.ConcertNotFoundException
+import kr.hhplus.be.server.common.exception.DuplicatePaymentException
 import kr.hhplus.be.server.common.exception.ErrorCode
 import kr.hhplus.be.server.common.exception.InsufficientPointException
 import kr.hhplus.be.server.common.exception.NegativePointException
 import kr.hhplus.be.server.common.exception.PaymentAmountMatchException
 import kr.hhplus.be.server.common.exception.PaymentInfoNotFoundException
+import kr.hhplus.be.server.common.exception.PointNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationSeatExpiredException
 import kr.hhplus.be.server.common.exception.ReservationSeatNotFoundException
@@ -138,5 +140,25 @@ class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
             .status(e.errorCode.status)
             .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
     }
+
+    @ExceptionHandler(DuplicatePaymentException::class)
+    fun handleDuplicatePaymentException(e: DuplicatePaymentException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle DuplicatePaymentException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
+
+    @ExceptionHandler(PointNotFoundException::class)
+    fun handlePointNotFoundException(e: PointNotFoundException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle PointNotFoundException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
+
+
 
 }

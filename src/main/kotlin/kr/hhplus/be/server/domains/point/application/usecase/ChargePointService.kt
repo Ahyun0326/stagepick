@@ -23,7 +23,7 @@ class ChargePointService(
         val findPoint = pointRepository.findPointByMemberId(memberId)
 
         findPoint.ifPresent {
-            val currentPoint = it.chargePoint(request.amount)
+            val currentPoint = it.chargeAndGetRemained(request.amount)
             pointRepository.save(it)
             savePointHistory(memberId, currentPoint, request.amount)
         }

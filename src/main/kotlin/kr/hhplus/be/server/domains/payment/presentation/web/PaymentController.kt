@@ -2,6 +2,7 @@ package kr.hhplus.be.server.domains.payment.presentation.web
 
 import kr.hhplus.be.server.common.response.ApiResponse
 import kr.hhplus.be.server.domains.payment.application.dto.PaymentRequest
+import kr.hhplus.be.server.domains.payment.application.dto.PaymentResponse
 import kr.hhplus.be.server.domains.payment.application.dto.PendingPaymentInfoResponse
 import kr.hhplus.be.server.domains.payment.application.facade.PaymentFacade
 import org.springframework.web.bind.annotation.GetMapping
@@ -23,7 +24,7 @@ class PaymentController(
     }
 
     @PostMapping
-    fun processPayment(@RequestBody request: PaymentRequest) {
-        paymentFacade.processPayment(request)
+    fun processPayment(@RequestBody request: PaymentRequest): ApiResponse<PaymentResponse> {
+        return ApiResponse.success(paymentFacade.processPayment(request))
     }
 }

@@ -5,12 +5,12 @@ class Point(
     val memberId: Long,
     var point: Int
 ) {
-    fun chargePoint(amount: Int): Int {
+    fun chargeAndGetRemained(amount: Int): Int {
         point += amount
         return point
     }
 
-    fun usePoint(amount: Int): Int {
+    fun useAndGetRemained(amount: Int): Int {
         point -= amount
         return point
     }

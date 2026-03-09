@@ -1,5 +1,6 @@
 package kr.hhplus.be.server.domains.reservation.infrastructure.persistence
 
+import kr.hhplus.be.server.common.exception.ReservationNotFoundException
 import kr.hhplus.be.server.domains.reservation.domain.model.Reservation
 import kr.hhplus.be.server.domains.reservation.domain.repository.ReservationRepository
 import kr.hhplus.be.server.domains.reservation.domain.repository.dto.ReservationPaymentDetailQueryDto

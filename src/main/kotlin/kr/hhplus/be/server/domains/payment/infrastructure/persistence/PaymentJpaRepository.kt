@@ -13,11 +13,17 @@ class PaymentJpaRepository(
     private val paymentMapper: PaymentMapper,
 ): PaymentRepository {
 
-    override fun save(payment: Payment, reservation: Reservation) {
+    override fun findByReservationId(reservationId: Long): Payment? {
+        return springPaymentJpa.findByReservationId(reservationId)
+            .map { paymentMapper.toDomain(it) }
+            .orElse(null)
+    }
+
+    override fun save(payment: Payment, reservation: Reservation): Payment {
         val reservationEntity = springReservationJpa.getReferenceById(reservation.id)
         val paymentEntity = paymentMapper.toEntity(payment, reservationEntity)
 
-        springPaymentJpa.save(paymentEntity)
+        return paymentMapper.toDomain(springPaymentJpa.save(paymentEntity))
     }
 
 }

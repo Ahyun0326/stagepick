@@ -1,6 +1,7 @@
 package kr.hhplus.be.server.domains.payment.application.facade
 
 import kr.hhplus.be.server.domains.payment.application.dto.PaymentRequest
+import kr.hhplus.be.server.domains.payment.application.dto.PaymentResponse
 import kr.hhplus.be.server.domains.payment.application.dto.PendingPaymentInfoResponse
 import kr.hhplus.be.server.domains.payment.application.usecase.FindPendingPaymentInfoService
 import kr.hhplus.be.server.domains.payment.application.usecase.ProcessPaymentService
@@ -19,7 +20,7 @@ class PaymentFacade(
     }
 
     @Transactional
-    fun processPayment(request: PaymentRequest) {
-        processPaymentService.process(request)
+    fun processPayment(request: PaymentRequest): PaymentResponse {
+        return processPaymentService.process(request)
     }
 }

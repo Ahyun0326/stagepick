@@ -13,14 +13,14 @@ class PointValidator {
         }
     }
 
-    fun validateInsufficientPoint(currentPoint: Int, amount: Int) {
-        if (currentPoint < amount) {
+    fun validateInsufficientPoint(point: Int, paymentAmount: Int) {
+        if (point < paymentAmount) {
             throw InsufficientPointException()
         }
     }
 
-    fun validatePaymentAmountMatch(paymentAmount: Int, requestPoint: Int) {
-        if (paymentAmount != requestPoint) {
+    fun validatePaymentAmountMatch(paymentAmount: Int, point: Int) {
+        if (paymentAmount != point) {
             throw PaymentAmountMatchException()
         }
     }

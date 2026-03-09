@@ -1,5 +1,7 @@
 package kr.hhplus.be.server.domains.seat.infrastructure.persistence
 
+import kr.hhplus.be.server.common.exception.ReservationNotFoundException
+import kr.hhplus.be.server.domains.reservation.domain.model.Reservation
 import kr.hhplus.be.server.domains.seat.domain.model.Seat
 import kr.hhplus.be.server.domains.seat.domain.model.SeatStatus
 import kr.hhplus.be.server.domains.seat.domain.repository.SeatRepository
@@ -51,9 +53,7 @@ class SeatJpaRepository(
     override fun findSeatsByReservationId(reservationId: Long): List<Seat> {
         val seatEntities = springSeatJpa.findAllByReservationId(reservationId)
 
-        return seatEntities.map {
-            seatMapper.toDomain(it)
-        }
+        return seatEntities.map { seatMapper.toDomain(it) }
     }
 
     override fun updateStatusToReserved(seatIds: List<Long>) {

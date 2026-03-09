@@ -9,9 +9,9 @@ class Payment(
     var price: Int,
     var status: String,
     val paymentLog: PaymentLog,
+    var createdAt: LocalDateTime? = null
 ) {
-    val id: Long = 0L
-    val paidAt: LocalDateTime? = null
+    var id: Long = 0L
 
     companion object {
         fun create(reservationId: Long, price: Int, paymentLog: PaymentLog): Payment {
@@ -20,9 +20,13 @@ class Payment(
                 number = TSID.fast().toLowerCase(),
                 price = price,
                 status = PaymentStatus.PAID.name,
-                paymentLog = paymentLog
+                paymentLog = paymentLog,
             )
         }
+    }
+
+    fun assignId(id: Long) {
+        this.id = id
     }
 
 }
