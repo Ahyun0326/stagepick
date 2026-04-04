@@ -38,3 +38,9 @@ out/
 .vscode/
 
 data
+
+# Claude code
+CLAUDE.md
+skills.md
+HANDOFF.md
+TESTING-GUIDE.md
