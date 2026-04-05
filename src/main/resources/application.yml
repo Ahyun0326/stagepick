@@ -27,6 +27,11 @@ spring:
       host: localhost
       port: 6379
 
+  jwt:
+    access-secret: ${JWT_ACCESS_SECRET}
+    access-expiration-ms: 1800000
+    refresh-expiration-ms: 86400000
+
 ---
 spring.config.activate.on-profile: local, test
 
