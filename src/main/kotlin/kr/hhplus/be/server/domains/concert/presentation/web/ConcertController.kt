@@ -13,20 +13,20 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping("/api/v1/concerts")
 class ConcertController(
-    private val concertService: ConcertService,
+    private val concertService: ConcertService
 ) {
     @GetMapping
     fun findConcerts(): ApiResponse<ConcertListResponse> {
-        return ApiResponse.Companion.success(concertService.findConcerts())
+        return ApiResponse.success(concertService.findConcerts())
     }
 
     @GetMapping("/{concertId}")
     fun getConcertDetail(@PathVariable concertId: Long): ApiResponse<ConcertDetailResponse> {
-        return ApiResponse.Companion.success(concertService.getConcertDetail(concertId))
+        return ApiResponse.success(concertService.getConcertDetail(concertId))
     }
 
     @GetMapping("/{concertId}/schedules")
     fun findAvailableConcerts(@PathVariable concertId: Long): ApiResponse<ConcertSchedulesResponse> {
-        return ApiResponse.Companion.success(concertService.findAvailableConcerts(concertId))
+        return ApiResponse.success(concertService.findAvailableConcerts(concertId))
     }
 }

@@ -22,11 +22,11 @@ class ReservationController(
 
     @GetMapping("/{scheduleId}")
     fun getSeatsInfo(@PathVariable("scheduleId") scheduleId: Long): ApiResponse<SeatsInfo> {
-        return ApiResponse.Companion.success(seatFacade.getSeatsInfo(scheduleId))
+        return ApiResponse.success(seatFacade.getSeatsInfo(scheduleId))
     }
 
     @PostMapping
     fun reserveSeat(@RequestBody reservationRequest: ReservationRequest): ApiResponse<ReservationResponse> {
-        return ApiResponse.Companion.success(reservationFacade.reserveSeat(reservationRequest))
+        return ApiResponse.success(reservationFacade.reserveSeat(reservationRequest))
     }
 }
