@@ -4,10 +4,13 @@ package kr.hhplus.be.server.common.advice
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kr.hhplus.be.server.common.exception.ConcertNotFoundException
+import kr.hhplus.be.server.common.exception.CustomException
 import kr.hhplus.be.server.common.exception.DuplicatePaymentException
 import kr.hhplus.be.server.common.exception.ErrorCode
 import kr.hhplus.be.server.common.exception.InsufficientPointException
+import kr.hhplus.be.server.common.exception.MemberNotFoundException
 import kr.hhplus.be.server.common.exception.NegativePointException
+import kr.hhplus.be.server.common.exception.PasswordMismatchException
 import kr.hhplus.be.server.common.exception.PaymentAmountMatchException
 import kr.hhplus.be.server.common.exception.PaymentInfoNotFoundException
 import kr.hhplus.be.server.common.exception.PointNotFoundException
@@ -31,6 +34,15 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
 
     val logger = KotlinLogging.logger("Exception Logger")
+
+    @ExceptionHandler(CustomException::class)
+    fun handleCustomException(e: CustomException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle CustomException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
 
     @ExceptionHandler(Exception::class)
     fun handleException(e: Exception): ResponseEntity<ApiErrorResponse> {
@@ -174,6 +186,24 @@ class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
     @ExceptionHandler(PointNotFoundException::class)
     fun handlePointNotFoundException(e: PointNotFoundException): ResponseEntity<ApiErrorResponse> {
         logger.error(e) { "Handle PointNotFoundException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
+
+    @ExceptionHandler(MemberNotFoundException::class)
+    fun handleMemberNotFoundException(e: MemberNotFoundException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle MemberNotFoundException $e" }
+
+        return ResponseEntity
+            .status(e.errorCode.status)
+            .body(ApiErrorResponse.of(e.errorCode.code, e.errorCode.message))
+    }
+
+    @ExceptionHandler(PasswordMismatchException::class)
+    fun handlePasswordMismatchException(e: PasswordMismatchException): ResponseEntity<ApiErrorResponse> {
+        logger.error(e) { "Handle PasswordMismatchException $e" }
 
         return ResponseEntity
             .status(e.errorCode.status)
