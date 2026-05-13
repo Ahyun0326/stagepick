@@ -5,14 +5,17 @@ import kr.hhplus.be.server.domains.queue.domain.repository.WaitingQueueRepositor
 
 class PromoteQueueTokenService(
     private val activeQueueRepository: ActiveQueueRepository,
-    private val waitingQueueRepository: WaitingQueueRepository
+    private val waitingQueueRepository: WaitingQueueRepository,
+    private val capacity: Long,
+    private val admissionRatePerTick: Long
 ) {
 
     fun execute() {
-        val remainingCount = 1000 - activeQueueRepository.countActive()
+        val availableSlots = capacity - activeQueueRepository.countActive()
+        val promoteCount = minOf(availableSlots, admissionRatePerTick)
 
-        if (remainingCount > 0) {
-            waitingQueueRepository.popWaiting(remainingCount)
+        if (promoteCount > 0) {
+            waitingQueueRepository.popWaiting(promoteCount)
                 .forEach { activeQueueRepository.saveActive(it) }
         }
     }

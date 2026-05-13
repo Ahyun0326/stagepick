@@ -10,9 +10,9 @@ class QueueScheduler(
 ) {
 
     /**
-     * 30초마다 만료된 토큰 정리 & 대기자 승격
-`    */
-    @Scheduled(fixedRate = 30_000)
+     * 설정된 주기마다 만료된 토큰 정리 & 대기자 승격
+     */
+    @Scheduled(fixedRateString = "\${queue.scheduler-interval-ms}")
     fun processQueue() {
         queueFacade.expireOverdueTokens()
         queueFacade.promoteWaitingTokens()

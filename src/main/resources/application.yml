@@ -32,6 +32,12 @@ spring:
     access-expiration-ms: 1800000
     refresh-expiration-ms: 86400000
 
+queue:
+  capacity: 1000
+  admission-rate-per-tick: 30
+  scheduler-interval-ms: 3000
+  booking-token-ttl-ms: 1800000
+
 ---
 spring.config.activate.on-profile: local, test
 

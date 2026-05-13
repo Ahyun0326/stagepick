@@ -14,12 +14,17 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 class QueueUseCaseConfig(
     private val activeQueueRepository: ActiveQueueRepository,
-    private val waitingQueueRepository: WaitingQueueRepository
+    private val waitingQueueRepository: WaitingQueueRepository,
+    private val queueProperties: QueueProperties
 ) {
 
     @Bean
     fun issueQueueTokenService(): IssueQueueTokenService =
-        IssueQueueTokenService(waitingQueueRepository, activeQueueRepository, ThresholdAdmissionPolicy(1000))
+        IssueQueueTokenService(
+            waitingQueueRepository,
+            activeQueueRepository,
+            ThresholdAdmissionPolicy(queueProperties.capacity)
+        )
 
     @Bean
     fun getQueueStatusService(): GetQueueStatusService =
@@ -31,7 +36,12 @@ class QueueUseCaseConfig(
 
     @Bean
     fun promoteQueueTokenService(): PromoteQueueTokenService =
-        PromoteQueueTokenService(activeQueueRepository, waitingQueueRepository)
+        PromoteQueueTokenService(
+            activeQueueRepository,
+            waitingQueueRepository,
+            queueProperties.capacity,
+            queueProperties.admissionRatePerTick
+        )
 
     @Bean
     fun validateQueueTokenService(): ValidateQueueTokenService =
