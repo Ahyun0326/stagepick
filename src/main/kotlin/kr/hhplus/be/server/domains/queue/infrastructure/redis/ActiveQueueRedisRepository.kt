@@ -58,8 +58,11 @@ class ActiveQueueRedisRepository(
     }
 
     override fun removeExpiredActive(scheduleId: Long) {
+        val key = activeKey(scheduleId)
         val now = System.currentTimeMillis().toDouble()
-        redisTemplate.opsForZSet().removeRangeByScore(activeKey(scheduleId), 0.0, now)
+
+        redisTemplate.opsForZSet().removeRangeByScore(key, 0.0, now)
+        removeScheduleIdIfEmpty(scheduleId, key)
     }
 
     override fun findScheduleIds(): List<Long> {
@@ -78,4 +81,11 @@ class ActiveQueueRedisRepository(
 
     private fun activeUuidKey(scheduleId: Long, uuid: String): String =
         String.format(KEY_PATTERN, scheduleId, uuid)
+
+    private fun removeScheduleIdIfEmpty(scheduleId: Long, key: String) {
+        val size = redisTemplate.opsForZSet().size(key) ?: 0L
+        if (size == 0L) {
+            redisTemplate.opsForSet().remove(SCHEDULE_SET_KEY, scheduleId.toString())
+        }
+    }
 }

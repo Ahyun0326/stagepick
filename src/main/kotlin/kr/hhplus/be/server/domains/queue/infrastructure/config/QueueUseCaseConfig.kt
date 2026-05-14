@@ -1,6 +1,7 @@
 package kr.hhplus.be.server.domains.queue.infrastructure.config
 
 import kr.hhplus.be.server.domains.queue.application.usecase.ExpireQueueTokenService
+import kr.hhplus.be.server.domains.queue.application.usecase.ExpireWaitingQueueTokenService
 import kr.hhplus.be.server.domains.queue.application.usecase.GetQueueStatusService
 import kr.hhplus.be.server.domains.queue.application.usecase.IssueQueueTokenService
 import kr.hhplus.be.server.domains.queue.application.usecase.PromoteQueueTokenService
@@ -33,6 +34,10 @@ class QueueUseCaseConfig(
     @Bean
     fun expireQueueTokenService(): ExpireQueueTokenService =
         ExpireQueueTokenService(activeQueueRepository)
+
+    @Bean
+    fun expireWaitingQueueTokenService(): ExpireWaitingQueueTokenService =
+        ExpireWaitingQueueTokenService(waitingQueueRepository)
 
     @Bean
     fun promoteQueueTokenService(): PromoteQueueTokenService =
