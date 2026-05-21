@@ -37,7 +37,7 @@ queue:
   admission-rate-per-tick: 30
   scheduler-interval-ms: 3000
   active-token-ttl-ms: 300000
-  waiting-token-ttl-ms: 600000
+  waiting-heartbeat-ttl-ms: 60000
 
 ---
 spring.config.activate.on-profile: local, test

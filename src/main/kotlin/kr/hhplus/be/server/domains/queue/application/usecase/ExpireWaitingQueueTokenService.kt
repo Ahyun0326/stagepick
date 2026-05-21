@@ -8,6 +8,6 @@ class ExpireWaitingQueueTokenService(
 
     fun execute() {
         waitingQueueRepository.findScheduleIds()
-            .forEach { waitingQueueRepository.removeExpiredWaiting(it) }
+            .forEach { waitingQueueRepository.removeInactiveWaiting(it) }
     }
 }

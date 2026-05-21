@@ -20,6 +20,7 @@ class GetQueueStatusService(
         }
 
         if (waitingQueueRepository.isWaiting(scheduleId, uuid)) {
+            waitingQueueRepository.touchHeartbeat(scheduleId, uuid)
             return QueueTokenResponse.waiting(
                 scheduleId = scheduleId,
                 rank = waitingQueueRepository.getRank(scheduleId, uuid)

@@ -50,6 +50,7 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
 
         every { activeQueueRepository.findActive(scheduleId, uuid) } returns null
         every { waitingQueueRepository.isWaiting(scheduleId, uuid) } returns true
+        every { waitingQueueRepository.touchHeartbeat(scheduleId, uuid) } returns Unit
         every { waitingQueueRepository.getRank(scheduleId, uuid) } returns 3
 
         `when`("토큰 발급을 요청하면") {
@@ -60,6 +61,7 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
                 result.token shouldBe null
                 result.status shouldBe AdmissionStatus.WAITING.name
                 result.rank shouldBe 3
+                verify(exactly = 1) { waitingQueueRepository.touchHeartbeat(scheduleId, uuid) }
             }
         }
     }

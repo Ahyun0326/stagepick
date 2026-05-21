@@ -10,5 +10,5 @@ class QueueProperties {
     var admissionRatePerTick: Long = 30
     var schedulerIntervalMs: Long = 3_000
     var activeTokenTtlMs: Long = 5 * 60 * 1000L
-    var waitingTokenTtlMs: Long = 10 * 60 * 1000L
+    var waitingHeartbeatTtlMs: Long = 60 * 1000L
 }

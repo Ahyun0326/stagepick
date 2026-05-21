@@ -4,6 +4,7 @@ import kr.hhplus.be.server.domains.queue.domain.repository.WaitingQueueRepositor
 import kr.hhplus.be.server.domains.queue.infrastructure.config.QueueProperties
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Repository
+import java.util.concurrent.TimeUnit
 
 @Repository
 class WaitingQueueRedisRepository(
@@ -13,13 +14,16 @@ class WaitingQueueRedisRepository(
 
     companion object {
         private const val ZSET_KEY_PATTERN = "queue:schedule:%d:waiting"
+        private const val HEARTBEAT_KEY_PATTERN = "queue:schedule:%d:waiting:heartbeat:%s"
         private const val SCHEDULE_SET_KEY = "queue:schedule:waiting"
+        private const val HEARTBEAT_VALUE = "ALIVE"
     }
 
     override fun add(scheduleId: Long, uuid: String) {
-        val expirationTime = System.currentTimeMillis() + queueProperties.waitingTokenTtlMs
+        val joinedAtMillis = System.currentTimeMillis()
         redisTemplate.opsForSet().add(SCHEDULE_SET_KEY, scheduleId.toString())
-        redisTemplate.opsForZSet().add(waitingKey(scheduleId), uuid, expirationTime.toDouble())
+        redisTemplate.opsForZSet().add(waitingKey(scheduleId), uuid, joinedAtMillis.toDouble())
+        touchHeartbeat(scheduleId, uuid)
     }
 
     override fun getRank(scheduleId: Long, uuid: String): Long? =
@@ -32,6 +36,7 @@ class WaitingQueueRedisRepository(
             ?.mapNotNull { it.value as? String }
             ?: emptyList()
 
+        deleteHeartbeat(scheduleId, waitingUuids)
         removeScheduleIdIfEmpty(scheduleId, key)
 
         return waitingUuids
@@ -40,11 +45,26 @@ class WaitingQueueRedisRepository(
     override fun isWaiting(scheduleId: Long, uuid: String): Boolean =
         redisTemplate.opsForZSet().score(waitingKey(scheduleId), uuid) != null
 
-    override fun removeExpiredWaiting(scheduleId: Long) {
-        val key = waitingKey(scheduleId)
-        val now = System.currentTimeMillis().toDouble()
+    override fun touchHeartbeat(scheduleId: Long, uuid: String) {
+        redisTemplate.opsForValue().set(
+            heartbeatKey(scheduleId, uuid),
+            HEARTBEAT_VALUE,
+            queueProperties.waitingHeartbeatTtlMs,
+            TimeUnit.MILLISECONDS
+        )
+    }
 
-        redisTemplate.opsForZSet().removeRangeByScore(key, 0.0, now)
+    override fun removeInactiveWaiting(scheduleId: Long) {
+        val key = waitingKey(scheduleId)
+        val inactiveUuids = redisTemplate.opsForZSet()
+            .range(key, 0, -1)
+            ?.mapNotNull { it as? String }
+            ?.filterNot { redisTemplate.hasKey(heartbeatKey(scheduleId, it)) == true }
+            ?: emptyList()
+
+        if (inactiveUuids.isNotEmpty()) {
+            redisTemplate.opsForZSet().remove(key, *inactiveUuids.toTypedArray())
+        }
         removeScheduleIdIfEmpty(scheduleId, key)
     }
 
@@ -56,6 +76,15 @@ class WaitingQueueRedisRepository(
 
     private fun waitingKey(scheduleId: Long): String =
         String.format(ZSET_KEY_PATTERN, scheduleId)
+
+    private fun heartbeatKey(scheduleId: Long, uuid: String): String =
+        String.format(HEARTBEAT_KEY_PATTERN, scheduleId, uuid)
+
+    private fun deleteHeartbeat(scheduleId: Long, uuids: List<String>) {
+        if (uuids.isNotEmpty()) {
+            redisTemplate.delete(uuids.map { heartbeatKey(scheduleId, it) })
+        }
+    }
 
     private fun removeScheduleIdIfEmpty(scheduleId: Long, key: String) {
         val size = redisTemplate.opsForZSet().size(key) ?: 0L

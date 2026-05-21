@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kr.hhplus.be.server.common.exception.QueueTokenNotFoundException
 import kr.hhplus.be.server.domains.queue.domain.model.AdmissionStatus
 import kr.hhplus.be.server.domains.queue.domain.repository.ActiveQueueRepository
@@ -45,6 +46,7 @@ class GetQueueStatusServiceTest : BehaviorSpec({
 
         every { activeQueueRepository.findActive(scheduleId, uuid) } returns null
         every { waitingQueueRepository.isWaiting(scheduleId, uuid) } returns true
+        every { waitingQueueRepository.touchHeartbeat(scheduleId, uuid) } returns Unit
         every { waitingQueueRepository.getRank(scheduleId, uuid) } returns 3
 
         `when`("대기열 상태를 조회하면") {
@@ -55,6 +57,7 @@ class GetQueueStatusServiceTest : BehaviorSpec({
                 result.token shouldBe null
                 result.status shouldBe AdmissionStatus.WAITING.name
                 result.rank shouldBe 3
+                verify(exactly = 1) { waitingQueueRepository.touchHeartbeat(scheduleId, uuid) }
             }
         }
     }

@@ -28,6 +28,8 @@ class IssueQueueTokenService(
 
         // 현재 대기열에 등록된 유저인지 확인
         if (waitingQueueRepository.isWaiting(scheduleId, uuid)) {
+            waitingQueueRepository.touchHeartbeat(scheduleId, uuid)
+
             return QueueTokenResponse.waiting(
                 scheduleId = scheduleId,
                 rank = waitingQueueRepository.getRank(scheduleId, uuid)
