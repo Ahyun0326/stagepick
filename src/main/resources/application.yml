@@ -40,10 +40,36 @@ queue:
   waiting-heartbeat-ttl-ms: 60000
 
 ---
-spring.config.activate.on-profile: local, test
-
 spring:
+  config:
+    activate:
+      on-profile: local, test
   datasource:
     url: jdbc:mysql://localhost:3306/hhplus?characterEncoding=UTF-8&serverTimezone=UTC
     username: application
     password: application
+
+app:
+  scheduler:
+    enabled: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: none
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+app:
+  scheduler:
+    enabled: ${APP_SCHEDULER_ENABLED:false}

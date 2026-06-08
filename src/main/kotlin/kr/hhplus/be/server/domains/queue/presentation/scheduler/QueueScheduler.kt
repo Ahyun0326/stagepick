@@ -1,9 +1,15 @@
 package kr.hhplus.be.server.domains.queue.presentation.scheduler
 
 import kr.hhplus.be.server.domains.queue.application.facade.QueueFacade
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 
+@ConditionalOnProperty(
+    prefix = "app.scheduler",
+    name = ["enabled"],
+    havingValue = "true"
+)
 @Component
 class QueueScheduler(
     private val queueFacade: QueueFacade

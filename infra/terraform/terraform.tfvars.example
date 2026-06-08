@@ -1,0 +1,4 @@
+aws_region          = "ap-northeast-2"
+project_name        = "concerts"
+environment         = "prod"
+ecr_repository_name = "concerts-api"
