@@ -91,3 +91,23 @@ output "api_service_url" {
   description = "API HTTPS service URL."
   value       = "https://${var.api_subdomain}.${var.domain_name}"
 }
+
+output "ecs_api_service_name" {
+  description = "ECS API service name."
+  value       = module.ecs_service.api_service_name
+}
+
+output "ecs_worker_service_name" {
+  description = "ECS worker service name."
+  value       = module.ecs_service.worker_service_name
+}
+
+output "ecs_api_task_definition_family" {
+  description = "ECS API task definition family."
+  value       = module.ecs_service.api_task_definition_family
+}
+
+output "ecs_worker_task_definition_family" {
+  description = "ECS worker task definition family."
+  value       = module.ecs_service.worker_task_definition_family
+}

@@ -17,3 +17,13 @@ output "vpc_endpoint_security_group_id" {
   description = "VPC endpoint security group ID."
   value       = aws_security_group.vpc_endpoint_sg.id
 }
+
+output "rds_security_group_id" {
+  description = "RDS security group ID."
+  value       = aws_security_group.rds_sg.id
+}
+
+output "redis_security_group_id" {
+  description = "Redis security group ID."
+  value       = aws_security_group.redis_sg.id
+}

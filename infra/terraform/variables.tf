@@ -43,7 +43,7 @@ variable "public_subnet_cidrs" {
 variable "private_subnet_cidrs" {
   description = "CIDR blocks for private subnets."
   type        = list(string)
-  default     = ["10.0.11.0/24"]
+  default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
 variable "app_port" {
@@ -62,4 +62,76 @@ variable "api_subdomain" {
   description = "Subdomain used by the backend API."
   type        = string
   default     = "api"
+}
+
+variable "initial_image_tag" {
+  description = "Initial image tag used only for bootstrapping ECS task definitions."
+  type        = string
+  default     = "latest"
+}
+
+variable "task_cpu" {
+  description = "Fargate task CPU units."
+  type        = number
+  default     = 512
+}
+
+variable "task_memory" {
+  description = "Fargate task memory MiB."
+  type        = number
+  default     = 1024
+}
+
+variable "api_desired_count" {
+  description = "Desired task count for API service."
+  type        = number
+  default     = 1
+}
+
+variable "worker_desired_count" {
+  description = "Desired task count for worker service."
+  type        = number
+  default     = 1
+}
+
+variable "jwt_access_secret" {
+  description = "JWT access token signing secret."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_name" {
+  description = "Initial database name."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_username" {
+  description = "Database master username."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_password" {
+  description = "Database master password."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class."
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_allocated_storage" {
+  description = "RDS allocated storage in GB."
+  type        = number
+  default     = 20
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type."
+  type        = string
+  default     = "cache.t4g.micro"
 }

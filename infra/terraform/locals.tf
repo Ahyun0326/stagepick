@@ -6,4 +6,6 @@ locals {
     Environment = var.environment
     ManagedBy   = "terraform"
   }
+
+  initial_image_uri = "${module.registry.repository_url}:${var.initial_image_tag}"
 }

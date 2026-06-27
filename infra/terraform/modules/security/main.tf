@@ -121,3 +121,59 @@ resource "aws_vpc_security_group_ingress_rule" "vpc_endpoint_from_ecs_worker" {
   to_port                      = 443
   ip_protocol                  = "tcp"
 }
+
+resource "aws_security_group" "rds_sg" {
+  name        = "${var.name_prefix}-rds-sg"
+  description = "Security group for RDS MySQL"
+  vpc_id      = var.vpc_id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.name_prefix}-rds-sg"
+  })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_ecs_api" {
+  security_group_id            = aws_security_group.rds_sg.id
+  description                  = "Allow MySQL from ECS API service"
+  referenced_security_group_id = aws_security_group.ecs_api_sg.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_ecs_worker" {
+  security_group_id            = aws_security_group.rds_sg.id
+  description                  = "Allow MySQL from ECS worker service"
+  referenced_security_group_id = aws_security_group.ecs_worker_sg.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_security_group" "redis_sg" {
+  name        = "${var.name_prefix}-redis-sg"
+  description = "Security group for Redis"
+  vpc_id      = var.vpc_id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.name_prefix}-redis-sg"
+  })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "redis_from_ecs_api" {
+  security_group_id            = aws_security_group.redis_sg.id
+  description                  = "Allow Redis from ECS API service"
+  referenced_security_group_id = aws_security_group.ecs_api_sg.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "redis_from_ecs_worker" {
+  security_group_id            = aws_security_group.redis_sg.id
+  description                  = "Allow Redis from ECS worker service"
+  referenced_security_group_id = aws_security_group.ecs_worker_sg.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
