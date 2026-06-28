@@ -89,6 +89,11 @@ module "dns_record" {
   api_subdomain  = var.api_subdomain
   alb_dns_name   = module.load_balancer.alb_dns_name
   alb_zone_id    = module.load_balancer.alb_zone_id
+
+  frontend_domain_name        = "www.${var.domain_name}"
+  vercel_cname_value          = var.vercel_cname_value
+  enable_frontend_apex_record = true
+  vercel_apex_a_record        = var.vercel_apex_a_record
 }
 
 module "ecs_service" {

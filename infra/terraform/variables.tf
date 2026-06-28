@@ -153,3 +153,13 @@ variable "bastion_instance_type" {
   type        = string
   default     = "t3.micro"
 }
+
+variable "vercel_cname_value" {
+  description = "Vercel CNAME target for frontend domain."
+  type        = string
+}
+
+variable "vercel_apex_a_record" {
+  description = "Vercel apex A record value."
+  type        = string
+}
