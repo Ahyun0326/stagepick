@@ -42,10 +42,11 @@ module "network" {
 module "security" {
   source = "./modules/security"
 
-  name_prefix = local.name_prefix
-  vpc_id      = module.network.vpc_id
-  app_port    = var.app_port
-  common_tags = local.common_tags
+  name_prefix              = local.name_prefix
+  vpc_id                   = module.network.vpc_id
+  app_port                 = var.app_port
+  bastion_allowed_ssh_cidr = var.bastion_allowed_ssh_cidr
+  common_tags              = local.common_tags
 }
 
 module "vpc_endpoints" {
@@ -135,4 +136,15 @@ module "datastore" {
   redis_node_type      = var.redis_node_type
 
   common_tags = local.common_tags
+}
+
+module "bastion" {
+  source = "./modules/bastion"
+
+  name_prefix       = local.name_prefix
+  public_subnet_id  = module.network.public_subnet_ids[0]
+  security_group_id = module.security.bastion_security_group_id
+  key_name          = var.bastion_key_name
+  instance_type     = var.bastion_instance_type
+  common_tags       = local.common_tags
 }

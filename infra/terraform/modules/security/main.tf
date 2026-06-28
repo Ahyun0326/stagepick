@@ -150,6 +150,15 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_ecs_worker" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "rds_from_bastion" {
+  security_group_id            = aws_security_group.rds_sg.id
+  description                  = "Allow MySQL from bastion host"
+  referenced_security_group_id = aws_security_group.bastion_sg.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+}
+
 resource "aws_security_group" "redis_sg" {
   name        = "${var.name_prefix}-redis-sg"
   description = "Security group for Redis"
@@ -173,6 +182,52 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_ecs_worker" {
   security_group_id            = aws_security_group.redis_sg.id
   description                  = "Allow Redis from ECS worker service"
   referenced_security_group_id = aws_security_group.ecs_worker_sg.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "redis_from_bastion" {
+  security_group_id            = aws_security_group.redis_sg.id
+  description                  = "Allow Redis from bastion host"
+  referenced_security_group_id = aws_security_group.bastion_sg.id
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_security_group" "bastion_sg" {
+  name        = "${var.name_prefix}-bastion-sg"
+  description = "Security group for bastion"
+  vpc_id      = var.vpc_id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.name_prefix}-bastion-sg"
+  })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "bastion_from_admin" {
+  security_group_id = aws_security_group.bastion_sg.id
+  description       = "Allow SSH from admin IP"
+  cidr_ipv4         = var.bastion_allowed_ssh_cidr
+  from_port         = 22
+  to_port           = 22
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_rds" {
+  security_group_id            = aws_security_group.bastion_sg.id
+  description                  = "Allow MySQL outbound to RDS"
+  referenced_security_group_id = aws_security_group.rds_sg.id
+  from_port                    = 3306
+  to_port                      = 3306
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_redis" {
+  security_group_id            = aws_security_group.bastion_sg.id
+  description                  = "Allow Redis outbound to ElastiCache"
+  referenced_security_group_id = aws_security_group.redis_sg.id
   from_port                    = 6379
   to_port                      = 6379
   ip_protocol                  = "tcp"

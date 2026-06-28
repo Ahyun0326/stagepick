@@ -135,3 +135,21 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t4g.micro"
 }
+
+variable "bastion_allowed_ssh_cidr" {
+  description = "Admin public IP CIDR allowed to SSH into the bastion host."
+  type        = string
+  sensitive   = true
+}
+
+variable "bastion_key_name" {
+  description = "Existing EC2 key pair name for bastion SSH access."
+  type        = string
+  sensitive   = true
+}
+
+variable "bastion_instance_type" {
+  description = "Bastion EC2 instance type."
+  type        = string
+  default     = "t3.micro"
+}

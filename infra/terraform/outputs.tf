@@ -111,3 +111,18 @@ output "ecs_worker_task_definition_family" {
   description = "ECS worker task definition family."
   value       = module.ecs_service.worker_task_definition_family
 }
+
+output "bastion_instance_id" {
+  description = "Bastion EC2 instance ID."
+  value       = module.bastion.instance_id
+}
+
+output "bastion_public_ip" {
+  description = "Bastion public IP address for SSH tunnel access."
+  value       = module.bastion.public_ip
+}
+
+output "bastion_public_dns" {
+  description = "Bastion public DNS name for SSH tunnel access."
+  value       = module.bastion.public_dns
+}
