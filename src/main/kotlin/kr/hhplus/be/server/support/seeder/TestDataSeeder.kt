@@ -8,9 +8,11 @@ import kr.hhplus.be.server.domains.seat.infrastructure.persistence.SeatEntity
 import kr.hhplus.be.server.domains.seat.infrastructure.persistence.SpringSeatJpa
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
+import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 
+@Profile("local", "test")
 @Component
 class TestDataSeeder(
     private val concertRepository: ConcertRepository,

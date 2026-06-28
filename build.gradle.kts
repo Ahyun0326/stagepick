@@ -16,9 +16,11 @@ allOpen {
 }
 
 fun getGitHash(): String {
-	return providers.exec {
-		commandLine("git", "rev-parse", "--short", "HEAD")
-	}.standardOutput.asText.get().trim()
+	return runCatching {
+		providers.exec {
+			commandLine("git", "rev-parse", "--short", "HEAD")
+		}.standardOutput.asText.get().trim()
+	}.getOrDefault("local")
 }
 
 group = "kr.hhplus.be"

@@ -39,6 +39,14 @@ out/
 
 data
 
+# Terraform
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/.terraform.tfstate.lock.info
+**/*.tfvars
+!**/*.tfvars.example
+
 # Agent
 CLAUDE.md
 AGENTS.md
