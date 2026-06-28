@@ -1,0 +1,136 @@
+name: ECS Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/ecs-fargate-deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
+      ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
+      ECS_API_TASK_FAMILY: ${{ vars.ECS_API_TASK_FAMILY }}
+      ECS_WORKER_TASK_FAMILY: ${{ vars.ECS_WORKER_TASK_FAMILY }}
+      API_CONTAINER_NAME: ${{ vars.API_CONTAINER_NAME }}
+      WORKER_CONTAINER_NAME: ${{ vars.WORKER_CONTAINER_NAME }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Test
+        run: ./gradlew test
+        env:
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECR URI
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY"
+          
+          echo "ECR_URI=$ECR_URI" >> "$GITHUB_ENV"
+
+      - name: Build and push image
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          chmod +x ./scripts/docker-build-push.sh
+          ./scripts/docker-build-push.sh
+          echo "IMAGE_URI=${ECR_URI}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Deploy API service
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_API_TASK_FAMILY" \
+            --query taskDefinition \
+            > api-task-definition.json
+
+          jq --arg IMAGE_URI "$IMAGE_URI" \
+             --arg CONTAINER_NAME "$API_CONTAINER_NAME" \
+             '.containerDefinitions |= map(
+                if .name == $CONTAINER_NAME
+                then .image = $IMAGE_URI
+                else .
+                end
+              )
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy
+                )' \
+             api-task-definition.json > api-task-definition-new.json
+
+          API_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://api-task-definition-new.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_API_SERVICE" \
+            --task-definition "$API_TASK_DEF_ARN"
+
+      - name: Deploy Worker service
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_WORKER_TASK_FAMILY" \
+            --query taskDefinition \
+            > worker-task-definition.json
+
+          jq --arg IMAGE_URI "$IMAGE_URI" \
+             --arg CONTAINER_NAME "$WORKER_CONTAINER_NAME" \
+             '.containerDefinitions |= map(
+                if .name == $CONTAINER_NAME
+                then .image = $IMAGE_URI
+                else .
+                end
+              )
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy
+                )' \
+             worker-task-definition.json > worker-task-definition-new.json
+
+          WORKER_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://worker-task-definition-new.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_WORKER_SERVICE" \
+            --task-definition "$WORKER_TASK_DEF_ARN"
+
+      - name: Wait for stable services
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_API_SERVICE" "$ECS_WORKER_SERVICE"
