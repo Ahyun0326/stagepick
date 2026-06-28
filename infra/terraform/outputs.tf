@@ -67,21 +67,6 @@ output "api_target_group_arn" {
   value       = module.load_balancer.target_group_arn
 }
 
-output "route53_name_servers" {
-  description = "Route 53 name servers to register at the domain registrar."
-  value       = module.domain.name_servers
-}
-
-output "route53_hosted_zone_id" {
-  description = "Route 53 hosted zone ID."
-  value       = module.domain.hosted_zone_id
-}
-
-output "acm_certificate_arn" {
-  description = "Validated ACM certificate ARN."
-  value       = module.domain.acm_certificate_arn
-}
-
 output "api_record_fqdn" {
   description = "API domain alias record FQDN."
   value       = module.dns_record.api_record_fqdn

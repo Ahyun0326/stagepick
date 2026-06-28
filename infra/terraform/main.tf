@@ -70,30 +70,17 @@ module "load_balancer" {
   vpc_id                = module.network.vpc_id
   app_port              = var.app_port
   common_tags           = local.common_tags
-  certificate_arn       = module.domain.acm_certificate_arn
-}
-
-module "domain" {
-  source = "./modules/domain"
-
-  name_prefix = local.name_prefix
-  domain_name = var.domain_name
-  common_tags = local.common_tags
+  certificate_arn       = var.acm_certificate_arn
 }
 
 module "dns_record" {
   source = "./modules/dns-record"
 
-  hosted_zone_id = module.domain.hosted_zone_id
+  hosted_zone_id = var.hosted_zone_id
   domain_name    = var.domain_name
   api_subdomain  = var.api_subdomain
   alb_dns_name   = module.load_balancer.alb_dns_name
   alb_zone_id    = module.load_balancer.alb_zone_id
-
-  frontend_domain_name        = "www.${var.domain_name}"
-  vercel_cname_value          = var.vercel_cname_value
-  enable_frontend_apex_record = true
-  vercel_apex_a_record        = var.vercel_apex_a_record
 }
 
 module "ecs_service" {

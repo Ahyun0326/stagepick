@@ -52,3 +52,5 @@ CLAUDE.md
 AGENTS.md
 docs/agent/
 ROADMAP.md
+docs/project/aws-cost-control-guide.md
+docs/project/terraform-global-prod-split-guide.md

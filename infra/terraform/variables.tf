@@ -64,6 +64,16 @@ variable "api_subdomain" {
   default     = "api"
 }
 
+variable "hosted_zone_id" {
+  description = "Route 53 hosted zone ID managed by the global Terraform root."
+  type        = string
+}
+
+variable "acm_certificate_arn" {
+  description = "Validated ACM certificate ARN managed by the global Terraform root."
+  type        = string
+}
+
 variable "initial_image_tag" {
   description = "Initial image tag used only for bootstrapping ECS task definitions."
   type        = string
@@ -152,14 +162,4 @@ variable "bastion_instance_type" {
   description = "Bastion EC2 instance type."
   type        = string
   default     = "t3.micro"
-}
-
-variable "vercel_cname_value" {
-  description = "Vercel CNAME target for frontend domain."
-  type        = string
-}
-
-variable "vercel_apex_a_record" {
-  description = "Vercel apex A record value."
-  type        = string
 }
