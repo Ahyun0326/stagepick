@@ -73,3 +73,5 @@ spring:
 app:
   scheduler:
     enabled: ${APP_SCHEDULER_ENABLED:false}
+  demo-seed:
+    enabled: ${APP_DEMO_SEED_ENABLED:false}

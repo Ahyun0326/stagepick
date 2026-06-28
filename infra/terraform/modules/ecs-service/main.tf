@@ -23,6 +23,7 @@ resource "aws_ecs_task_definition" "api" {
       environment = [
         { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "APP_SCHEDULER_ENABLED", value = "false" },
+        { name = "APP_DEMO_SEED_ENABLED", value = "false" },
         { name = "JWT_ACCESS_SECRET", value = var.jwt_access_secret },
         { name = "SPRING_DATASOURCE_URL", value = var.datasource_url },
         { name = "SPRING_DATASOURCE_USERNAME", value = var.datasource_username },
@@ -90,6 +91,7 @@ resource "aws_ecs_task_definition" "worker" {
       environment = [
         { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
         { name = "APP_SCHEDULER_ENABLED", value = "true" },
+        { name = "APP_DEMO_SEED_ENABLED", value = "true" },
         { name = "JWT_ACCESS_SECRET", value = var.jwt_access_secret },
         { name = "SPRING_DATASOURCE_URL", value = var.datasource_url },
         { name = "SPRING_DATASOURCE_USERNAME", value = var.datasource_username },
