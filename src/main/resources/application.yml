@@ -64,7 +64,7 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD}
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
   data:
     redis:
       host: ${SPRING_DATA_REDIS_HOST}
