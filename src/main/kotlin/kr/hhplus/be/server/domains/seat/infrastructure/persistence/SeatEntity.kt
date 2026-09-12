@@ -49,7 +49,6 @@ class SeatEntity(
         protected set
 
     @Column(name = "reservation_id")
-    @OnDelete(action = OnDeleteAction.SET_NULL)
     var reservationId: Long? = null
         protected set
 
