@@ -13,7 +13,7 @@ import kr.hhplus.be.server.common.jpa.BaseEntity
 @Table(
     name = "reservation",
     indexes = [
-        Index(name = "idx_memeber_id", columnList = "memeber_id")
+        Index(name = "idx_member_id", columnList = "member_id")
     ]
 )
 class ReservationEntity(
@@ -24,7 +24,7 @@ class ReservationEntity(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long = 0L
 
-    @Column(nullable = false, name = "memeber_id")
+    @Column(nullable = false, name = "member_id")
     var memberId: Long = memberId
         protected set
 
