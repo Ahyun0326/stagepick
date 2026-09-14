@@ -1,0 +1,3 @@
+spring:
+  jwt:
+    access-secret: aGhwbHVzLWludGVncmF0aW9uLXRlc3Qtc2VjcmV0ISE=
