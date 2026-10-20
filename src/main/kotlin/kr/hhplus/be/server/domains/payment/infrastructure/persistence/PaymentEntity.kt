@@ -19,10 +19,12 @@ import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 import java.time.LocalDateTime
 
+// number 컬럼은 @Column(unique = true)로 이미 UNIQUE 인덱스가 자동 생성된다.
+// idx_number는 그 위에 겹친 중복 인덱스였다 — EXPLAIN 실측상 옵티마이저는 항상 UNIQUE 인덱스를 썼고
+// (docs/report/step4-index-report.md 시나리오 5), 중복 인덱스는 쓰기 시 유지 비용만 더할 뿐이라 제거했다.
 @Entity
 @Table(name = "payment", indexes = [
-    Index(name = "idx_reservation_id", columnList = "reservation_id"),
-    Index(name = "idx_number", columnList = "number")
+    Index(name = "idx_reservation_id", columnList = "reservation_id")
 ])
 class PaymentEntity(
     reservation: ReservationEntity,
