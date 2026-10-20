@@ -104,3 +104,24 @@ tasks.withType<Test> {
 	useJUnitPlatform()
 	systemProperty("user.timezone", "UTC")
 }
+
+// 기본 test 태스크에서는 대량 데이터 시딩 + EXPLAIN 측정을 하는 perf 테스트를 제외한다.
+// (Step4 선택 심화 ① 인덱스 보고서용 측정 하네스 — docs/report/step4-index-report.md 참고)
+tasks.test {
+	useJUnitPlatform {
+		excludeTags("perf")
+	}
+}
+
+tasks.register<Test>("perfTest") {
+	group = "verification"
+	description = "인덱스 성능 측정 테스트 (대량 데이터 시딩 + EXPLAIN/EXPLAIN ANALYZE, docs/report/data/에 결과 저장)"
+	testClassesDirs = sourceSets["test"].output.classesDirs
+	classpath = sourceSets["test"].runtimeClasspath
+	useJUnitPlatform {
+		includeTags("perf")
+	}
+	systemProperty("user.timezone", "UTC")
+	// 측정 결과가 매번 바뀔 수 있으므로 캐시하지 않고 항상 재실행한다.
+	outputs.upToDateWhen { false }
+}
