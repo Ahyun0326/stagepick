@@ -26,13 +26,30 @@ interface SpringSeatJpa : JpaRepository<SeatEntity, Long> {
     fun findSeatEntitiesByIdIn(ids: List<Long>): MutableList<SeatEntity>
 
     @Modifying(clearAutomatically = true)
-    @Query("update SeatEntity s set s.status = :status, s.reservationId = null where s.id in :ids")
-    fun updateStatusToAvailable(@Param("ids") expiredSeatIds: List<Long>, @Param("status") status: String)
+    // 조건부 UPDATE: 결제로 이미 RESERVED 가 된 좌석을 만료 처리가 되돌리지 않도록 HOLD 일 때만 해제
+    @Query(
+        "update SeatEntity s set s.status = :available, s.reservationId = null " +
+                "where s.id in :ids and s.status = :hold"
+    )
+    fun releaseHeldSeats(
+        @Param("ids") ids: List<Long>,
+        @Param("available") available: String,
+        @Param("hold") hold: String
+    ): Int
 
     fun findAllByReservationId(reservationId: Long): List<SeatEntity>
 
     @Modifying(clearAutomatically = true)
-    @Query("update SeatEntity s set s.status = :status where s.id in :ids")
-    fun updateStatusToReserved(@Param("ids") ids: List<Long>, @Param("status") status: String)
+    // 조건부 UPDATE: 확인과 쓰기 사이에 만료 처리가 먼저 해제했다면 0건 → 예약 없는 RESERVED 좌석이 생기지 않는다
+    @Query(
+        "update SeatEntity s set s.status = :reserved " +
+                "where s.id in :ids and s.status = :hold and s.reservationId = :reservationId"
+    )
+    fun confirmHeldSeats(
+        @Param("ids") ids: List<Long>,
+        @Param("reservationId") reservationId: Long,
+        @Param("reserved") reserved: String,
+        @Param("hold") hold: String
+    ): Int
 
 }

@@ -1,5 +1,6 @@
 package kr.hhplus.be.server.domains.seat.infrastructure.config
 
+import kr.hhplus.be.server.domains.common.transaction.AfterCommitExecutor
 import kr.hhplus.be.server.domains.schedule.domain.repository.ScheduleRepository
 import kr.hhplus.be.server.domains.seat.application.usecase.ExpireSeatHoldService
 import kr.hhplus.be.server.domains.seat.application.usecase.GetSeatsInfoService
@@ -23,8 +24,9 @@ class SeatUseCaseConfig {
     @Bean
     fun expireSeatHoldService(
         seatRepository: SeatRepository,
-        seatHoldRepository: SeatHoldRepository
+        seatHoldRepository: SeatHoldRepository,
+        afterCommitExecutor: AfterCommitExecutor
     ): ExpireSeatHoldService {
-        return ExpireSeatHoldService(seatRepository, seatHoldRepository)
+        return ExpireSeatHoldService(seatRepository, seatHoldRepository, afterCommitExecutor)
     }
 }

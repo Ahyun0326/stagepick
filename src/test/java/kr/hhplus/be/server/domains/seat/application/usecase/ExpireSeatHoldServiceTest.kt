@@ -7,6 +7,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.verify
+import kr.hhplus.be.server.domains.common.transaction.AfterCommitExecutor
 import kr.hhplus.be.server.domains.seat.domain.repository.SeatHoldRepository
 import kr.hhplus.be.server.domains.seat.domain.repository.SeatRepository
 
@@ -16,8 +17,12 @@ class ExpireSeatHoldServiceTest : BehaviorSpec({
 
     val seatRepository: SeatRepository = mockk()
     val seatHoldRepository: SeatHoldRepository = mockk()
+    val afterCommitExecutor: AfterCommitExecutor = mockk()
 
-    val expireSeatHoldService = ExpireSeatHoldService(seatRepository, seatHoldRepository)
+    val expireSeatHoldService = ExpireSeatHoldService(seatRepository, seatHoldRepository, afterCommitExecutor)
+
+    // 커밋 이후 실행기는 작업을 즉시 실행한다 (커밋 시점 동작은 통합 테스트에서 검증)
+    every { afterCommitExecutor.execute(any()) } answers { firstArg<() -> Unit>().invoke() }
 
     given("만료된 좌석이 없을 때") {
         every { seatHoldRepository.getExpiredSeats() } returns emptyList()
@@ -26,8 +31,8 @@ class ExpireSeatHoldServiceTest : BehaviorSpec({
             expireSeatHoldService.processExpiredSeats()
 
             then("좌석 상태 변경과 임시 배정된 좌석 제거가 호출되지 않는다") {
-                verify(exactly = 0) { seatRepository.updateStatusToAvailable(any()) }
-                verify(exactly = 0) { seatHoldRepository.removeSeats(any()) }
+                verify(exactly = 0) { seatRepository.releaseHeldSeats(any()) }
+                verify(exactly = 0) { seatHoldRepository.removeExpiredSeats(any()) }
             }
         }
     }
@@ -36,15 +41,16 @@ class ExpireSeatHoldServiceTest : BehaviorSpec({
         val expiredSeatIds = listOf(1L, 2L)
 
         every { seatHoldRepository.getExpiredSeats() } returns expiredSeatIds
-        every { seatRepository.updateStatusToAvailable(expiredSeatIds) } just runs
-        every { seatHoldRepository.removeSeats(expiredSeatIds) } just runs
+        every { seatRepository.releaseHeldSeats(expiredSeatIds) } returns expiredSeatIds.size
+        every { seatHoldRepository.removeExpiredSeats(expiredSeatIds) } just runs
 
         `when`("만료 처리를 실행하면") {
             expireSeatHoldService.processExpiredSeats()
 
-            then("만료된 좌석이 AVAILABLE로 변경되고 임시 배정된 좌석이 제거된다") {
-                verify(exactly = 1) { seatRepository.updateStatusToAvailable(expiredSeatIds) }
-                verify(exactly = 1) { seatHoldRepository.removeSeats(expiredSeatIds) }
+            then("HOLD 인 좌석만 해제하고, 커밋 이후 아직 만료 상태인 홀드만 제거한다") {
+                verify(exactly = 1) { seatRepository.releaseHeldSeats(expiredSeatIds) }
+                verify(exactly = 1) { afterCommitExecutor.execute(any()) }
+                verify(exactly = 1) { seatHoldRepository.removeExpiredSeats(expiredSeatIds) }
             }
         }
     }

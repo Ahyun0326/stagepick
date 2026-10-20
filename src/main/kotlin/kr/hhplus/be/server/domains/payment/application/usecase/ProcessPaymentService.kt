@@ -7,6 +7,7 @@ import kr.hhplus.be.server.common.exception.PointNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationSeatExpiredException
 import kr.hhplus.be.server.domains.common.lock.LockManager
+import kr.hhplus.be.server.domains.common.transaction.AfterCommitExecutor
 import kr.hhplus.be.server.domains.payment.application.dto.PaymentRequest
 import kr.hhplus.be.server.domains.payment.application.dto.PaymentResponse
 import kr.hhplus.be.server.domains.payment.domain.model.Payment
@@ -32,7 +33,8 @@ class ProcessPaymentService(
     private val pointHistoryRepository: PointHistoryRepository,
     private val paymentRepository: PaymentRepository,
     private val pointValidator: PointValidator,
-    private val lockManager: LockManager
+    private val lockManager: LockManager,
+    private val afterCommitExecutor: AfterCommitExecutor
 ) {
     fun process(memberId: Long, request: PaymentRequest): PaymentResponse {
         // 동시성 방지를 위한 분산 락 적용
@@ -51,7 +53,7 @@ class ProcessPaymentService(
                 seats.sumOf { it.price }
             )
 
-            confirmReservation(seats)
+            confirmReservation(reservation, seats)
             processPointUsage(point, request.point, memberId)
 
             return@runWithLock PaymentResponse.from(
@@ -76,8 +78,16 @@ class ProcessPaymentService(
 
     private fun getSeats(reservation: Reservation): List<Seat> {
         // 배정된 좌석의 예약 유효 시간이 지났을 경우 결제 실패
-        return seatRepository.findSeatsByReservationId(reservation.id)
+        // - 스케줄러가 이미 해제한 경우: 예약에 연결된 좌석이 없음
+        // - 만료 시각은 지났지만 스케줄러가 아직 해제하지 않은 경우: 홀드 만료 시각으로 판단
+        val seats = seatRepository.findSeatsByReservationId(reservation.id)
             .ifEmpty { throw ReservationSeatExpiredException() }
+
+        if (!seatHoldRepository.isAllHoldActive(seats.map { it.id })) {
+            throw ReservationSeatExpiredException()
+        }
+
+        return seats
     }
 
     private fun getReservation(memberId: Long, reservationId: Long): Reservation {
@@ -100,10 +110,18 @@ class ProcessPaymentService(
         pointValidator.validateInsufficientPoint(memberBalance, usagePoint)
     }
 
-    private fun confirmReservation(seats: List<Seat>) {
-        // 유효성 검증 성공 시 좌석 상태 변경 및 redis에서 제거
-        seatRepository.updateStatusToReserved(seats.map { it.id })
-        seatHoldRepository.removeSeats(seats.map { it.id })
+    private fun confirmReservation(reservation: Reservation, seats: List<Seat>) {
+        val seatIds = seats.map { it.id }
+
+        // 해당 예약이 HOLD 중인 좌석만 확정 (조건부 UPDATE). 홀드 확인 이후 만료 처리가 먼저 해제했다면
+        // 일부/전부 0건이 되므로 예외 → 롤백. 이 단계가 첫 쓰기라 되돌릴 다른 변경은 없다
+        val confirmed = seatRepository.confirmHeldSeats(seatIds, reservation.id)
+        if (confirmed != seatIds.size) {
+            throw ReservationSeatExpiredException()
+        }
+
+        // Redis 홀드 제거는 DB 커밋 이후에만 실행 (이후 단계에서 롤백되면 홀드 유지 → 만료 시 정상 해제)
+        afterCommitExecutor.execute { seatHoldRepository.removeSeats(seatIds) }
     }
 
     private fun processPointUsage(

@@ -46,9 +46,8 @@ class SeatJpaRepository(
         springSeatJpa.saveAll(seatEntities)
     }
 
-    override fun updateStatusToAvailable(expiredSeatIds: List<Long>) {
-        springSeatJpa.updateStatusToAvailable(expiredSeatIds, SeatStatus.AVAILABLE.name)
-    }
+    override fun releaseHeldSeats(seatIds: List<Long>): Int =
+        springSeatJpa.releaseHeldSeats(seatIds, SeatStatus.AVAILABLE.name, SeatStatus.HOLD.name)
 
     override fun findSeatsByReservationId(reservationId: Long): List<Seat> {
         val seatEntities = springSeatJpa.findAllByReservationId(reservationId)
@@ -56,7 +55,6 @@ class SeatJpaRepository(
         return seatEntities.map { seatMapper.toDomain(it) }
     }
 
-    override fun updateStatusToReserved(seatIds: List<Long>) {
-        springSeatJpa.updateStatusToReserved(seatIds, SeatStatus.RESERVED.name)
-    }
+    override fun confirmHeldSeats(seatIds: List<Long>, reservationId: Long): Int =
+        springSeatJpa.confirmHeldSeats(seatIds, reservationId, SeatStatus.RESERVED.name, SeatStatus.HOLD.name)
 }

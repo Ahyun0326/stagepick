@@ -1,6 +1,7 @@
 package kr.hhplus.be.server.domains.payment.infrastructure.config
 
 import kr.hhplus.be.server.domains.common.lock.LockManager
+import kr.hhplus.be.server.domains.common.transaction.AfterCommitExecutor
 import kr.hhplus.be.server.domains.payment.application.usecase.FindPendingPaymentInfoService
 import kr.hhplus.be.server.domains.payment.application.usecase.ProcessPaymentService
 import kr.hhplus.be.server.domains.payment.domain.repository.PaymentRepository
@@ -36,7 +37,8 @@ class PaymentUseCaseConfig {
         pointHistoryRepository: PointHistoryRepository,
         paymentRepository: PaymentRepository,
         pointValidator: PointValidator,
-        lockManager: LockManager
+        lockManager: LockManager,
+        afterCommitExecutor: AfterCommitExecutor
     ): ProcessPaymentService {
         return ProcessPaymentService(
             reservationRepository,
@@ -46,7 +48,8 @@ class PaymentUseCaseConfig {
             pointHistoryRepository,
             paymentRepository,
             pointValidator,
-            lockManager
+            lockManager,
+            afterCommitExecutor
         )
     }
 

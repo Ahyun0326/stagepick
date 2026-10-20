@@ -18,6 +18,7 @@ import kr.hhplus.be.server.common.exception.PointNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationSeatExpiredException
 import kr.hhplus.be.server.domains.common.lock.LockManager
+import kr.hhplus.be.server.domains.common.transaction.AfterCommitExecutor
 import kr.hhplus.be.server.domains.payment.application.dto.PaymentRequest
 import kr.hhplus.be.server.domains.payment.domain.model.Payment
 import kr.hhplus.be.server.domains.payment.domain.model.PaymentStatus
@@ -48,6 +49,7 @@ class ProcessPaymentServiceTest : BehaviorSpec({
     val paymentRepository: PaymentRepository = mockk()
     val pointValidator: PointValidator = mockk()
     val lockManager: LockManager = mockk()
+    val afterCommitExecutor: AfterCommitExecutor = mockk()
     val memberId = 1L
 
     val processPaymentService = ProcessPaymentService(
@@ -58,7 +60,8 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         pointHistoryRepository,
         paymentRepository,
         pointValidator,
-        lockManager
+        lockManager,
+        afterCommitExecutor
     )
 
     // 전역 전제 조건: 모든 테스트에서 락 매니저는 항상 람다를 즉시 실행한다
@@ -69,6 +72,9 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         val block = args.last() as () -> Any?
         block.invoke()
     }
+
+    // 전역 전제 조건: 커밋 이후 실행기는 작업을 즉시 실행한다 (커밋 시점 동작은 통합 테스트에서 검증)
+    every { afterCommitExecutor.execute(any()) } answers { firstArg<() -> Unit>().invoke() }
 
     given("이미 결제된 예약 ID로") {
         val reservationId = 1L
@@ -164,6 +170,65 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         }
     }
 
+    given("좌석은 아직 예약에 연결돼 있지만 홀드 만료 시각이 지났을 때 (스케줄러 해제 전)") {
+        val reservationId = 1L
+        val point = 1000
+        val reservation = Reservation("test", memberId).apply { assignId(reservationId) }
+        val seats = Seat(1L, 1L, "A1", SeatStatus.HOLD.name, point)
+
+        val request = PaymentRequest(reservationId, point, scheduleId = 10L)
+
+        every { paymentRepository.findByReservationId(reservationId) } returns null
+        every { pointValidator.validateNegativePoint(point) } just runs
+        every { reservationRepository.findById(reservationId) } returns reservation
+        every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns false
+
+        `when`("결제 요청이 들어오면") {
+            then("ReservationSeatExpiredException이 발생하고 좌석 상태는 바뀌지 않는다") {
+                shouldThrow<ReservationSeatExpiredException> {
+                    processPaymentService.process(memberId, request)
+                }
+
+                verify(exactly = 0) { seatRepository.confirmHeldSeats(any(), any()) }
+                verify(exactly = 0) { seatHoldRepository.removeSeats(any()) }
+            }
+        }
+    }
+
+    given("검증은 통과했지만 결제 확정 직전에 만료 처리가 좌석을 먼저 해제했을 때") {
+        val reservationId = 1L
+        val usagePoint = 1000
+        val reservation = Reservation("test", memberId).apply { assignId(reservationId) }
+        val seats = Seat(1L, 1L, "A1", SeatStatus.HOLD.name, usagePoint)
+        val point = Point(1L, memberId, usagePoint)
+
+        val request = PaymentRequest(reservationId, usagePoint, scheduleId = 10L)
+
+        every { paymentRepository.findByReservationId(reservationId) } returns null
+        every { pointValidator.validateNegativePoint(usagePoint) } just runs
+        every { pointValidator.validatePaymentAmountMatch(usagePoint, usagePoint) } just runs
+        every { pointValidator.validateInsufficientPoint(usagePoint, usagePoint) } just runs
+        every { reservationRepository.findById(reservationId) } returns reservation
+        every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
+        every { pointRepository.findPointByMemberId(any()) } returns Optional.of(point)
+        // 조건부 UPDATE(HOLD + 해당 예약)가 0건 → 체크와 쓰기 사이 경합
+        every { seatRepository.confirmHeldSeats(listOf(seats.id), reservationId) } returns 0
+
+        `when`("결제 요청이 들어오면") {
+            then("ReservationSeatExpiredException이 발생하고 포인트·결제·Redis 정리는 실행되지 않는다") {
+                shouldThrow<ReservationSeatExpiredException> {
+                    processPaymentService.process(memberId, request)
+                }
+
+                verify(exactly = 0) { pointRepository.save(any()) }
+                verify(exactly = 0) { paymentRepository.save(any(), any()) }
+                verify(exactly = 0) { afterCommitExecutor.execute(any()) }
+            }
+        }
+    }
+
     given("회원의 포인트가 존재하지 않을 때") {
         val reservationId = 1L
         val point = 1000
@@ -176,6 +241,7 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         every { pointValidator.validateNegativePoint(point) } just runs
         every { reservationRepository.findById(reservationId) } returns reservation
         every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
         every { pointRepository.findPointByMemberId(any()) } returns Optional.empty<Point>()
 
         `when`("결제 요청이 들어오면") {
@@ -202,6 +268,7 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         every { pointValidator.validateNegativePoint(usagePoint) } just runs
         every { reservationRepository.findById(reservationId) } returns reservation
         every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
         every { pointRepository.findPointByMemberId(any()) } returns Optional.of(point)
         every {
             pointValidator.validatePaymentAmountMatch(
@@ -235,6 +302,7 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         every { pointValidator.validateNegativePoint(usagePoint) } just runs
         every { reservationRepository.findById(reservationId) } returns reservation
         every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
         every { pointRepository.findPointByMemberId(any()) } returns Optional.of(point)
         every { pointValidator.validatePaymentAmountMatch(paymentAmount, usagePoint) } just runs
         every {
@@ -287,11 +355,12 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         // 조회 단계
         every { reservationRepository.findById(reservationId) } returns reservation
         every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
         every { pointRepository.findPointByMemberId(any()) } returns Optional.of(point)
         every { reservationRepository.getWithDetailsById(reservationId) } returns reservationPaymentDetailQueryDto
 
         // 저장 단계
-        every { seatRepository.updateStatusToReserved(any()) } just runs
+        every { seatRepository.confirmHeldSeats(listOf(seats.id), reservationId) } returns 1
         every { seatHoldRepository.removeSeats(any()) } just runs
         every { pointRepository.save(any()) } returns point
         every { pointHistoryRepository.save(any()) } returns mockk()
@@ -303,6 +372,13 @@ class ProcessPaymentServiceTest : BehaviorSpec({
 
                 verify(exactly = 1) { pointRepository.save(point) }
                 verify(exactly = 1) { paymentRepository.save(any(), any()) }
+            }
+
+            then("Redis 홀드 제거는 커밋 이후 실행기를 통해 위임된다") {
+                processPaymentService.process(memberId, request)
+
+                verify(exactly = 1) { afterCommitExecutor.execute(any()) }
+                verify(exactly = 1) { seatHoldRepository.removeSeats(listOf(seats.id)) }
             }
 
             then("결제 응답이 정상적으로 반환된다.") {
