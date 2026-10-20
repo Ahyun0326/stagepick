@@ -17,6 +17,19 @@ class SeatHoldRedisRepository(
         private const val ZSET_KEY = "seat_delay_queue"
         private const val TTL_SECONDS = 5 * 60
 
+        // 홀드 키 SET + 만료 큐 ZADD 를 한 번에 실행
+        // ARGV[1] = 만료 시각(ms), ARGV[2] = 홀드 값, ARGV[3..] = 좌석 ID 목록 (KEYS[2..] 와 순서 같음)
+        private val HOLD_SCRIPT = DefaultRedisScript(
+            """
+            for i = 3, #ARGV do
+                redis.call('SET', KEYS[i - 1], ARGV[2])
+                redis.call('ZADD', KEYS[1], ARGV[1], ARGV[i])
+            end
+            return #ARGV - 2
+            """.trimIndent(),
+            Long::class.java
+        )
+
         // 키 삭제와 만료 큐 제거를 한 번에 실행 (중간 실패로 TTL 없는 키만 남는 것을 방지)
         // ARGV = 좌석 ID 목록
         private val REMOVE_SCRIPT = DefaultRedisScript(
@@ -50,15 +63,12 @@ class SeatHoldRedisRepository(
     }
 
     override fun hold(seats: List<Seat>) {
-        val now = System.currentTimeMillis()
-        val expiredAt = now + TTL_SECONDS * 1000
+        if (seats.isEmpty()) return
+        val expiredAt = System.currentTimeMillis() + TTL_SECONDS * 1000
+        val seatIds = seats.map { it.id }
 
-        seats.forEach {
-            val key = String.format(KEY_PATTERN, it.id)
-
-            redisTemplate.opsForValue().set(key, VALUE)
-            redisTemplate.opsForZSet().add(ZSET_KEY, it.id, expiredAt.toDouble())
-        }
+        // 홀드 키와 만료 큐 등록을 한 번에 실행 → 늦게 도착한 만료 정리가 둘 사이에 끼어들 수 없다
+        redisTemplate.execute(HOLD_SCRIPT, keysOf(seatIds), expiredAt, VALUE, *seatIds.toTypedArray())
     }
 
     override fun getHeldStatus(seatIds: List<Long>): List<Boolean> {

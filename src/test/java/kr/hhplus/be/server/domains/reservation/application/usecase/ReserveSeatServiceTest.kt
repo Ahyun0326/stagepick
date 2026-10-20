@@ -3,7 +3,6 @@ package kr.hhplus.be.server.domains.reservation.application.usecase
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.BehaviorSpec
-import io.kotest.inspectors.forAll
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.mockk.every
@@ -141,7 +140,6 @@ class ReserveSeatServiceTest : BehaviorSpec({
         every { seatValidator.validateExistingSeats(any(), any()) } just runs
         every { seatValidator.validateAvailableSeats(any()) } just runs
         every { reservationRepository.save(any()) } returns reservation
-        every { seatRepository.saveAll(any()) } just runs
         every { seatHoldRepository.hold(any()) } just runs
 
         `when`("좌석 2개를 예약하면") {
@@ -152,15 +150,15 @@ class ReserveSeatServiceTest : BehaviorSpec({
             )
 
             every { seatRepository.findSeats(scheduleId, seatIds) } returns seats
+            every { seatRepository.holdAvailableSeats(seatIds, reservation.id) } returns seatIds.size
 
             val result = reserveSeatService.invoke(memberId, ReservationRequest(scheduleId, seatIds))
 
-            then("2개 좌석 모두 HOLD로 변경되고 예약된다") {
+            then("2개 좌석 모두 조건부 UPDATE 로 HOLD 되고 예약된다") {
                 verify(exactly = 1) { reservationRepository.save(any()) }
-                verify(exactly = 1) { seatRepository.saveAll(any()) }
+                verify(exactly = 1) { seatRepository.holdAvailableSeats(seatIds, reservation.id) }
                 verify(exactly = 1) { seatHoldRepository.hold(any()) }
 
-                seats.forAll { seat -> seat.status shouldBe SeatStatus.HOLD.name }
                 result.shouldNotBeNull { this.reservationId shouldBe reservation.id }
             }
         }
@@ -172,16 +170,35 @@ class ReserveSeatServiceTest : BehaviorSpec({
             )
 
             every { seatRepository.findSeats(scheduleId, seatIds) } returns seats
+            every { seatRepository.holdAvailableSeats(seatIds, reservation.id) } returns seatIds.size
 
             val result = reserveSeatService.invoke(memberId, ReservationRequest(scheduleId, seatIds))
 
             then("단일 좌석도 정상 예약된다") {
                 verify(exactly = 1) { reservationRepository.save(any()) }
-                verify(exactly = 1) { seatRepository.saveAll(any()) }
+                verify(exactly = 1) { seatRepository.holdAvailableSeats(seatIds, reservation.id) }
                 verify(exactly = 1) { seatHoldRepository.hold(any()) }
 
-                seats.forAll { seat -> seat.status shouldBe SeatStatus.HOLD.name }
                 result.shouldNotBeNull { this.reservationId shouldBe reservation.id }
+            }
+        }
+
+        `when`("조회 시점엔 AVAILABLE 이었지만 조건부 UPDATE 에서 일부 좌석이 이미 선점됐다면 (락이 뚫린 경합)") {
+            val seatIds = listOf(1L, 2L)
+            val seats = listOf(
+                Seat(id = 1L, scheduleId = scheduleId, number = "A1", status = SeatStatus.AVAILABLE.name, price = 50000),
+                Seat(id = 2L, scheduleId = scheduleId, number = "A2", status = SeatStatus.AVAILABLE.name, price = 50000)
+            )
+
+            every { seatRepository.findSeats(scheduleId, seatIds) } returns seats
+            every { seatRepository.holdAvailableSeats(seatIds, reservation.id) } returns 1
+
+            then("SeatUnavailableException 이 발생하고 Redis 홀드는 등록되지 않는다") {
+                shouldThrow<SeatUnavailableException> {
+                    reserveSeatService.invoke(memberId, ReservationRequest(scheduleId, seatIds))
+                }
+
+                verify(exactly = 0) { seatHoldRepository.hold(any()) }
             }
         }
     }

@@ -55,6 +55,9 @@ class SeatJpaRepository(
         return seatEntities.map { seatMapper.toDomain(it) }
     }
 
+    override fun holdAvailableSeats(seatIds: List<Long>, reservationId: Long): Int =
+        springSeatJpa.holdAvailableSeats(seatIds, reservationId, SeatStatus.HOLD.name, SeatStatus.AVAILABLE.name)
+
     override fun confirmHeldSeats(seatIds: List<Long>, reservationId: Long): Int =
         springSeatJpa.confirmHeldSeats(seatIds, reservationId, SeatStatus.RESERVED.name, SeatStatus.HOLD.name)
 }

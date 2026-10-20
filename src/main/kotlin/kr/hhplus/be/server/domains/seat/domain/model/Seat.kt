@@ -1,7 +1,5 @@
 package kr.hhplus.be.server.domains.seat.domain.model
 
-import kr.hhplus.be.server.domains.reservation.domain.model.Reservation
-
 class Seat(
     val id: Long,
     val scheduleId: Long,
@@ -18,10 +16,5 @@ class Seat(
         }
 
         return true
-    }
-
-    fun reserve(reservation: Reservation) {
-        status = SeatStatus.HOLD.name
-        reservationId = reservation.id
     }
 }

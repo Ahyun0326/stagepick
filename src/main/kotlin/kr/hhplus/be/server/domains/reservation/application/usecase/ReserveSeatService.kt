@@ -1,5 +1,6 @@
 package kr.hhplus.be.server.domains.reservation.application.usecase
 
+import kr.hhplus.be.server.common.exception.SeatUnavailableException
 import kr.hhplus.be.server.common.exception.ScheduleNotFoundException
 import kr.hhplus.be.server.domains.common.lock.LockManager
 import kr.hhplus.be.server.domains.reservation.application.dto.ReservationRequest
@@ -51,8 +52,12 @@ class ReserveSeatService(
             // 이용 가능하면 좌석 예약 진행
             val reservation = reservationRepository.save(Reservation.create(memberId))
 
-            seats.forEach { it.reserve(reservation) }
-            seatRepository.saveAll(seats)
+            // AVAILABLE 일 때만 HOLD 로 바꾸는 조건부 UPDATE (분산락 다음의 두 번째 방어선)
+            // 일부라도 선점됐으면 예외 → 같은 트랜잭션의 예약 저장까지 롤백
+            val held = seatRepository.holdAvailableSeats(reservationRequest.seatIds, reservation.id)
+            if (held != reservationRequest.seatIds.size) {
+                throw SeatUnavailableException(reservationRequest.seatIds)
+            }
 
             // 좌석 배정 시간 5분으로 설정
             seatHoldRepository.hold(seats)
