@@ -3,6 +3,7 @@ package kr.hhplus.be.server.domains.queue.infrastructure.redis
 import kr.hhplus.be.server.domains.queue.domain.repository.ActiveQueueRepository
 import kr.hhplus.be.server.domains.queue.infrastructure.config.QueueProperties
 import org.springframework.data.redis.core.RedisTemplate
+import org.springframework.data.redis.core.script.DefaultRedisScript
 import org.springframework.stereotype.Repository
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -17,6 +18,37 @@ class ActiveQueueRedisRepository(
         private const val KEY_PATTERN = "queue:schedule:%d:active:uuid:%s"
         private const val ZSET_KEY_PATTERN = "queue:schedule:%d:active"
         private const val SCHEDULE_SET_KEY = "queue:schedule:active"
+
+        // 정원 확인(ZCOUNT)과 등록(SADD+ZADD+SET)을 한 번에 실행 → countActive 후 saveActive를
+        // 따로 호출하던 check-then-act 경합(정원 초과 발급)을 막는다.
+        // KEYS[1] = 스케줄 활성 ZSET, KEYS[2] = uuid -> token 매핑 key, KEYS[3] = 활성 스케줄 집합
+        // ARGV[1] = 현재 시각(ms), ARGV[2] = 정원, ARGV[3] = 새로 발급할 토큰,
+        // ARGV[4] = 만료 시각(ms), ARGV[5] = TTL(ms), ARGV[6] = scheduleId(문자열)
+        // 반환: 1 = 활성 보장(기존 토큰 유지 또는 신규 발급), 0 = 정원 초과로 미발급
+        // 같은 uuid로 동시에 여러 번 호출돼도 Redis가 EVAL을 한 번에 하나씩만 실행하므로,
+        // 먼저 실행된 호출이 심어둔 uuid 매핑을 뒤이은 호출이 그대로 재사용해 토큰이 중복 집계되지 않는다.
+        private val TRY_ISSUE_ACTIVE_SCRIPT = DefaultRedisScript(
+            """
+            local existingToken = redis.call('GET', KEYS[2])
+            if existingToken then
+                local score = redis.call('ZSCORE', KEYS[1], existingToken)
+                if score and tonumber(score) > tonumber(ARGV[1]) then
+                    return 1
+                end
+            end
+
+            local activeCount = redis.call('ZCOUNT', KEYS[1], ARGV[1], '+inf')
+            if tonumber(activeCount) < tonumber(ARGV[2]) then
+                redis.call('SADD', KEYS[3], ARGV[6])
+                redis.call('ZADD', KEYS[1], ARGV[4], ARGV[3])
+                redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[5])
+                return 1
+            end
+
+            return 0
+            """.trimIndent(),
+            Long::class.java
+        )
     }
 
     override fun countActive(scheduleId: Long): Long {
@@ -44,6 +76,25 @@ class ActiveQueueRedisRepository(
         redisTemplate.opsForValue().set(key, token, queueProperties.activeTokenTtlMs, TimeUnit.MILLISECONDS)
 
         return token
+    }
+
+    override fun tryIssueActive(scheduleId: Long, uuid: String, capacity: Long): Boolean {
+        val now = System.currentTimeMillis()
+        val token = UUID.randomUUID().toString()
+        val expirationTime = now + queueProperties.activeTokenTtlMs
+
+        val admitted = redisTemplate.execute(
+            TRY_ISSUE_ACTIVE_SCRIPT,
+            listOf(activeKey(scheduleId), activeUuidKey(scheduleId, uuid), SCHEDULE_SET_KEY),
+            now,
+            capacity,
+            token,
+            expirationTime,
+            queueProperties.activeTokenTtlMs,
+            scheduleId.toString()
+        )
+
+        return admitted == 1L
     }
 
     override fun findActive(scheduleId: Long, uuid: String): String? =

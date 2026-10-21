@@ -4,6 +4,8 @@ import kr.hhplus.be.server.domains.concert.domain.model.Concert
 import kr.hhplus.be.server.domains.concert.domain.repository.ConcertRepository
 import kr.hhplus.be.server.domains.member.domain.model.Member
 import kr.hhplus.be.server.domains.member.domain.repository.MemberRepository
+import kr.hhplus.be.server.domains.point.domain.model.Point
+import kr.hhplus.be.server.domains.point.domain.repository.PointRepository
 import kr.hhplus.be.server.domains.schedule.domain.model.Schedule
 import kr.hhplus.be.server.domains.schedule.domain.repository.ScheduleRepository
 import kr.hhplus.be.server.domains.seat.infrastructure.persistence.SeatEntity
@@ -13,19 +15,25 @@ import java.util.UUID
 
 /**
  * 콘서트 예약 시나리오용 통합 테스트 데이터 픽스처
- * - 회원 / 콘서트 / 회차 / 좌석을 실제 DB 에 저장한다
- * - 필수 통합 테스트 3종과 기능별 통합 테스트에서 재사용한다
+ * - 회원 / 콘서트 / 회차 / 좌석 / 포인트를 실제 DB 에 저장한다
+ * - 필수 통합 테스트 3종, 기능별 통합 테스트, 동시성 테스트에서 재사용한다
  */
 class ConcertReservationFixture(
     private val memberRepository: MemberRepository,
     private val concertRepository: ConcertRepository,
     private val scheduleRepository: ScheduleRepository,
-    private val springSeatJpa: SpringSeatJpa
+    private val springSeatJpa: SpringSeatJpa,
+    private val pointRepository: PointRepository
 ) {
 
     fun createMember(): Member {
         val loginId = "user-${UUID.randomUUID().toString().take(LOGIN_ID_SUFFIX_LENGTH)}"
         return memberRepository.save(Member.create(loginId, ENCODED_PASSWORD, USERNAME))
+    }
+
+    /** 포인트 행을 바로 원하는 잔액으로 생성한다 (ChargePointService를 거치지 않는 테스트 전용 셋업) */
+    fun chargePoint(memberId: Long, amount: Int) {
+        pointRepository.save(Point(memberId = memberId, point = amount))
     }
 
     fun createScheduleWithSeats(seatCount: Int, price: Int): ScheduleWithSeats {

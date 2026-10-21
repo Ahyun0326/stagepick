@@ -2,6 +2,7 @@ package kr.hhplus.be.server
 
 import kr.hhplus.be.server.domains.concert.domain.repository.ConcertRepository
 import kr.hhplus.be.server.domains.member.domain.repository.MemberRepository
+import kr.hhplus.be.server.domains.point.domain.repository.PointRepository
 import kr.hhplus.be.server.domains.schedule.domain.repository.ScheduleRepository
 import kr.hhplus.be.server.domains.seat.infrastructure.persistence.SpringSeatJpa
 import kr.hhplus.be.server.support.DatabaseCleaner
@@ -26,6 +27,7 @@ class IntegrationTestConfiguration {
         memberRepository: MemberRepository,
         concertRepository: ConcertRepository,
         scheduleRepository: ScheduleRepository,
-        springSeatJpa: SpringSeatJpa
-    ) = ConcertReservationFixture(memberRepository, concertRepository, scheduleRepository, springSeatJpa)
+        springSeatJpa: SpringSeatJpa,
+        pointRepository: PointRepository
+    ) = ConcertReservationFixture(memberRepository, concertRepository, scheduleRepository, springSeatJpa, pointRepository)
 }

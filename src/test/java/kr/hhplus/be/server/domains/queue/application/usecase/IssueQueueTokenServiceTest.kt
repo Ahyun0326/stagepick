@@ -7,7 +7,6 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kr.hhplus.be.server.domains.queue.domain.model.AdmissionStatus
-import kr.hhplus.be.server.domains.queue.domain.policy.AdmissionPolicy
 import kr.hhplus.be.server.domains.queue.domain.repository.ActiveQueueRepository
 import kr.hhplus.be.server.domains.queue.domain.repository.WaitingQueueRepository
 
@@ -17,11 +16,11 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
 
     val waitingQueueRepository: WaitingQueueRepository = mockk()
     val activeQueueRepository: ActiveQueueRepository = mockk()
-    val admissionPolicy: AdmissionPolicy = mockk()
+    val capacity = 1000L
     val issueQueueTokenService = IssueQueueTokenService(
         waitingQueueRepository,
         activeQueueRepository,
-        admissionPolicy
+        capacity
     )
 
     given("이미 스케줄 활성 토큰이 있는 사용자로") {
@@ -71,11 +70,9 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
         val uuid = "member-uuid"
         val token = "queue-token"
 
-        every { activeQueueRepository.findActive(scheduleId, uuid) } returns null
+        every { activeQueueRepository.findActive(scheduleId, uuid) } returnsMany listOf(null, token)
         every { waitingQueueRepository.isWaiting(scheduleId, uuid) } returns false
-        every { activeQueueRepository.countActive(scheduleId) } returns 10
-        every { admissionPolicy.judge(10) } returns AdmissionStatus.ACTIVE
-        every { activeQueueRepository.saveActive(scheduleId, uuid) } returns token
+        every { activeQueueRepository.tryIssueActive(scheduleId, uuid, capacity) } returns true
         every { activeQueueRepository.getRemainingSeconds(scheduleId, uuid) } returns 100
 
         `when`("토큰 발급을 요청하면") {
@@ -85,7 +82,7 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
                 result.scheduleId shouldBe scheduleId
                 result.token shouldBe token
                 result.status shouldBe AdmissionStatus.ACTIVE.name
-                verify(exactly = 1) { activeQueueRepository.saveActive(scheduleId, uuid) }
+                verify(exactly = 1) { activeQueueRepository.tryIssueActive(scheduleId, uuid, capacity) }
             }
         }
     }
@@ -96,8 +93,7 @@ class IssueQueueTokenServiceTest : BehaviorSpec({
 
         every { activeQueueRepository.findActive(scheduleId, uuid) } returns null
         every { waitingQueueRepository.isWaiting(scheduleId, uuid) } returns false
-        every { activeQueueRepository.countActive(scheduleId) } returns 1000
-        every { admissionPolicy.judge(1000) } returns AdmissionStatus.WAITING
+        every { activeQueueRepository.tryIssueActive(scheduleId, uuid, capacity) } returns false
         every { waitingQueueRepository.add(scheduleId, uuid) } returns Unit
         every { waitingQueueRepository.getRank(scheduleId, uuid) } returns 11
 

@@ -6,7 +6,6 @@ import kr.hhplus.be.server.domains.queue.application.usecase.GetQueueStatusServi
 import kr.hhplus.be.server.domains.queue.application.usecase.IssueQueueTokenService
 import kr.hhplus.be.server.domains.queue.application.usecase.PromoteQueueTokenService
 import kr.hhplus.be.server.domains.queue.application.usecase.ValidateQueueTokenService
-import kr.hhplus.be.server.domains.queue.domain.policy.ThresholdAdmissionPolicy
 import kr.hhplus.be.server.domains.queue.domain.repository.ActiveQueueRepository
 import kr.hhplus.be.server.domains.queue.domain.repository.WaitingQueueRepository
 import org.springframework.context.annotation.Bean
@@ -24,7 +23,7 @@ class QueueUseCaseConfig(
         IssueQueueTokenService(
             waitingQueueRepository,
             activeQueueRepository,
-            ThresholdAdmissionPolicy(queueProperties.capacity)
+            queueProperties.capacity
         )
 
     @Bean

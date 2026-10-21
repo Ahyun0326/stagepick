@@ -25,4 +25,10 @@ class PointJpaRepository(
         val savedEntity = springPointJpa.save(entity)
         return savedEntity.toDomain()
     }
+
+    override fun chargePoint(memberId: Long, amount: Int): Int =
+        springPointJpa.chargePoint(memberId, amount)
+
+    override fun usePoint(memberId: Long, amount: Int): Int =
+        springPointJpa.usePoint(memberId, amount)
 }

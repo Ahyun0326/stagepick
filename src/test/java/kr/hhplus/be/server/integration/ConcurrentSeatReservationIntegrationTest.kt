@@ -12,14 +12,12 @@ import kr.hhplus.be.server.domains.seat.domain.model.SeatStatus
 import kr.hhplus.be.server.domains.seat.domain.repository.SeatHoldRepository
 import kr.hhplus.be.server.domains.seat.infrastructure.persistence.SpringSeatJpa
 import kr.hhplus.be.server.support.fixture.ConcertReservationFixture
+import kr.hhplus.be.server.support.runConcurrently
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.jdbc.core.JdbcTemplate
 import java.util.Collections
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /**
  * 필수 통합 테스트 ③ - 여러 사용자가 같은 좌석을 동시에 요청하면 한 명만 성공한다
@@ -52,7 +50,7 @@ class ConcurrentSeatReservationIntegrationTest : IntegrationTestBase() {
         // when - N명이 같은 순간에 같은 좌석 예약
         val successReservationIds = Collections.synchronizedList(mutableListOf<Long>())
         val failures = Collections.synchronizedList(mutableListOf<Throwable>())
-        runConcurrently(uuids) { uuid ->
+        runConcurrently(uuids, AWAIT_SECONDS) { uuid ->
             runCatching { reservationFacade.reserveSeat(uuid, ReservationRequest(scheduleId, seatIds)) }
                 .onSuccess { successReservationIds += it.reservationId }
                 .onFailure { failures += it }
@@ -72,31 +70,6 @@ class ConcurrentSeatReservationIntegrationTest : IntegrationTestBase() {
 
         // then 3 - 실패한 요청의 예약 행은 남지 않는다 (좌석 없는 고아 예약 없음)
         countReservations() shouldBe 1
-    }
-
-    /** 모든 작업을 출발선에 세운 뒤 동시에 시작시키고, 끝날 때까지 기다린다 */
-    private fun <T> runConcurrently(inputs: List<T>, task: (T) -> Unit) {
-        val executor = Executors.newFixedThreadPool(inputs.size)
-        val ready = CountDownLatch(inputs.size)
-        val startGate = CountDownLatch(1)
-        val done = CountDownLatch(inputs.size)
-
-        inputs.forEach { input ->
-            executor.submit {
-                ready.countDown()
-                startGate.await()
-                try {
-                    task(input)
-                } finally {
-                    done.countDown()
-                }
-            }
-        }
-
-        ready.await(AWAIT_SECONDS, TimeUnit.SECONDS)
-        startGate.countDown()
-        done.await(AWAIT_SECONDS, TimeUnit.SECONDS) shouldBe true
-        executor.shutdown()
     }
 
     private fun countReservations(): Int =

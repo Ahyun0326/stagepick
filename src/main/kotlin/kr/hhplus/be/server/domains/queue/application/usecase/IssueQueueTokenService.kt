@@ -1,15 +1,13 @@
 package kr.hhplus.be.server.domains.queue.application.usecase
 
 import kr.hhplus.be.server.domains.queue.application.dto.response.QueueTokenResponse
-import kr.hhplus.be.server.domains.queue.domain.model.AdmissionStatus
-import kr.hhplus.be.server.domains.queue.domain.policy.AdmissionPolicy
 import kr.hhplus.be.server.domains.queue.domain.repository.ActiveQueueRepository
 import kr.hhplus.be.server.domains.queue.domain.repository.WaitingQueueRepository
 
 class IssueQueueTokenService(
     private val waitingQueueRepository: WaitingQueueRepository,
     private val activeQueueRepository: ActiveQueueRepository,
-    private val policy: AdmissionPolicy
+    private val capacity: Long
 ) {
 
     /**
@@ -36,28 +34,25 @@ class IssueQueueTokenService(
             )
         }
 
-        val activeCount = activeQueueRepository.countActive(scheduleId)
+        // 정원 확인과 발급을 원자적으로 수행 (countActive 후 saveActive를 따로 호출하던
+        // check-then-act 경합을 막는다 — STEP4 선택 심화 ②)
+        val admitted = activeQueueRepository.tryIssueActive(scheduleId, uuid, capacity)
 
-        return when (policy.judge(activeCount)) {
-            // 활성 토큰 즉시 발급
-            AdmissionStatus.ACTIVE -> {
-                val token = activeQueueRepository.saveActive(scheduleId, uuid)
-                val remainingSeconds = activeQueueRepository.getRemainingSeconds(scheduleId, uuid)
+        if (admitted) {
+            val token = activeQueueRepository.findActive(scheduleId, uuid)
+                ?: throw IllegalStateException("활성 처리된 토큰을 찾을 수 없습니다. scheduleId=$scheduleId")
 
-                QueueTokenResponse.active(
-                    scheduleId = scheduleId,
-                    token = token,
-                    remainingSeconds = remainingSeconds
-                )
-            }
-
-            // 대기열 추가
-            AdmissionStatus.WAITING -> {
-                waitingQueueRepository.add(scheduleId, uuid)
-                val rank = waitingQueueRepository.getRank(scheduleId, uuid)
-
-                QueueTokenResponse.waiting(scheduleId = scheduleId, rank = rank)
-            }
+            return QueueTokenResponse.active(
+                scheduleId = scheduleId,
+                token = token,
+                remainingSeconds = activeQueueRepository.getRemainingSeconds(scheduleId, uuid)
+            )
         }
+
+        // 정원이 가득 차 대기열로 등록
+        waitingQueueRepository.add(scheduleId, uuid)
+        val rank = waitingQueueRepository.getRank(scheduleId, uuid)
+
+        return QueueTokenResponse.waiting(scheduleId = scheduleId, rank = rank)
     }
 }

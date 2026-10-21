@@ -321,6 +321,46 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         }
     }
 
+    // STEP4 선택 심화 ② 동시성: 사전 검증(validateInsufficientPoint)은 통과했지만, 같은 회원의
+    // 다른 예약 결제가 그 사이 먼저 커밋되어 조건부 UPDATE 시점에는 잔액이 모자라게 된 경우.
+    // 조건부 UPDATE가 0건을 반환하는 것이 마지막 방어선이다.
+    given("사전 검증 통과 후 동시 결제로 조건부 UPDATE 시점에 잔액이 부족해졌을 때") {
+        val reservationId = 1L
+        val usagePoint = 1000
+        val paymentAmount = 1000
+        val memberBalance = 1000
+
+        val reservation = Reservation("test", memberId).apply { assignId(reservationId) }
+        val seats = Seat(1L, 1L, "A1", SeatStatus.AVAILABLE.name, paymentAmount)
+        val point = Point(1L, memberId, memberBalance)
+
+        val request = PaymentRequest(reservationId, usagePoint, scheduleId = 10L)
+
+        every { paymentRepository.findByReservationId(reservationId) } returns null
+        every { pointValidator.validateNegativePoint(usagePoint) } just runs
+        every { reservationRepository.findById(reservationId) } returns reservation
+        every { seatRepository.findSeatsByReservationId(reservationId) } returns listOf(seats)
+        every { seatHoldRepository.isAllHoldActive(listOf(seats.id)) } returns true
+        every { pointRepository.findPointByMemberId(any()) } returns Optional.of(point)
+        every { pointValidator.validatePaymentAmountMatch(paymentAmount, usagePoint) } just runs
+        every { pointValidator.validateInsufficientPoint(memberBalance, usagePoint) } just runs
+        every { seatRepository.confirmHeldSeats(listOf(seats.id), reservationId) } returns 1
+        every { seatHoldRepository.removeSeats(any()) } just runs
+        // 동시에 들어온 다른 결제가 먼저 커밋되어 조건을 만족하는 행이 없음 (0건)
+        every { pointRepository.usePoint(memberId, usagePoint) } returns 0
+
+        `when`("결제 요청이 들어오면") {
+            then("InsufficientPointException이 발생하고 결제·포인트 내역은 저장되지 않는다") {
+                shouldThrow<InsufficientPointException> {
+                    processPaymentService.process(memberId, request)
+                }
+
+                verify(exactly = 0) { pointHistoryRepository.save(any()) }
+                verify(exactly = 0) { paymentRepository.save(any(), any()) }
+            }
+        }
+    }
+
     given("유효한 예약 ID와 충분한 포인트로") {
         val reservationId = 1L
         val usagePoint = 1000
@@ -362,15 +402,17 @@ class ProcessPaymentServiceTest : BehaviorSpec({
         // 저장 단계
         every { seatRepository.confirmHeldSeats(listOf(seats.id), reservationId) } returns 1
         every { seatHoldRepository.removeSeats(any()) } just runs
-        every { pointRepository.save(any()) } returns point
+        // 조건부 UPDATE(point = point - amount, point >= amount)가 원자적으로 차감한다 (lost update 방지)
+        every { pointRepository.usePoint(memberId, usagePoint) } returns 1
         every { pointHistoryRepository.save(any()) } returns mockk()
         every { paymentRepository.save(any(), reservation) } returns payment
 
         `when`("결제 요청이 들어오면") {
-            then("포인트가 차감되고 결제 내역이 저장된다") {
+            then("포인트가 원자적 조건부 UPDATE로 차감되고 결제 내역이 저장된다") {
                 processPaymentService.process(memberId, request)
 
-                verify(exactly = 1) { pointRepository.save(point) }
+                verify(exactly = 1) { pointRepository.usePoint(memberId, usagePoint) }
+                verify(exactly = 0) { pointRepository.save(any()) }
                 verify(exactly = 1) { paymentRepository.save(any(), any()) }
             }
 

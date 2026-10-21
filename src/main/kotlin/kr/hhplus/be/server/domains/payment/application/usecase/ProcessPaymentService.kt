@@ -2,6 +2,7 @@ package kr.hhplus.be.server.domains.payment.application.usecase
 
 import kr.hhplus.be.server.common.exception.DuplicatePaymentException
 import kr.hhplus.be.server.common.extension.throwIfNotNull
+import kr.hhplus.be.server.common.exception.InsufficientPointException
 import kr.hhplus.be.server.common.exception.PaymentInfoNotFoundException
 import kr.hhplus.be.server.common.exception.PointNotFoundException
 import kr.hhplus.be.server.common.exception.ReservationNotFoundException
@@ -54,7 +55,7 @@ class ProcessPaymentService(
             )
 
             confirmReservation(reservation, seats)
-            processPointUsage(point, request.point, memberId)
+            processPointUsage(memberId, request.point)
 
             return@runWithLock PaymentResponse.from(
                 processPayment(reservation, request.point)
@@ -124,15 +125,17 @@ class ProcessPaymentService(
         afterCommitExecutor.execute { seatHoldRepository.removeSeats(seatIds) }
     }
 
-    private fun processPointUsage(
-        point: Point,
-        usagePoint: Int,
-        memberId: Long
-    ) {
-        // 회원 포인트 감소
-        val remainPoint = point.useAndGetRemained(usagePoint)
+    private fun processPointUsage(memberId: Long, usagePoint: Int) {
+        // 조건부 UPDATE(point = point - amount, point >= amount)로 원자적 차감.
+        // 위에서 이미 잔액을 확인했더라도, 같은 회원의 다른 예약 결제가 동시에 끼어들면
+        // 이 조건부 UPDATE가 0건을 반환해 최종 방어선 역할을 한다 (lost update 방지).
+        val usedRows = pointRepository.usePoint(memberId, usagePoint)
+        if (usedRows == 0) throw InsufficientPointException()
 
-        pointRepository.save(point)
+        val remainPoint = pointRepository.findPointByMemberId(memberId)
+            .orElseThrow { PointNotFoundException() }
+            .point
+
         pointHistoryRepository.save(PointHistory.create(memberId, remainPoint, usagePoint, PointHistoryType.USE))
     }
 

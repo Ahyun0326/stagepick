@@ -1,8 +1,8 @@
 package kr.hhplus.be.server.domains.point.application.usecase
 
+import kr.hhplus.be.server.common.exception.PointNotFoundException
 import kr.hhplus.be.server.domains.point.application.dto.request.ChargePointRequest
 import kr.hhplus.be.server.domains.point.application.validator.PointValidator
-import kr.hhplus.be.server.domains.point.domain.model.Point
 import kr.hhplus.be.server.domains.point.domain.model.PointHistory
 import kr.hhplus.be.server.domains.point.domain.model.PointHistoryType
 import kr.hhplus.be.server.domains.point.domain.repository.PointHistoryRepository
@@ -20,19 +20,16 @@ class ChargePointService(
 ) {
     fun invoke(memberId: Long, request: ChargePointRequest) {
         pointValidator.validateNegativePoint(request.amount)
-        val findPoint = pointRepository.findPointByMemberId(memberId)
 
-        findPoint.ifPresent {
-            val currentPoint = it.chargeAndGetRemained(request.amount)
-            pointRepository.save(it)
-            savePointHistory(memberId, currentPoint, request.amount)
-        }
+        // 조건부 UPDATE(point = point + amount)로 원자적 충전. 포인트 행이 없는 최초 충전이거나,
+        // 최초 충전이 동시에 경합하는 경우까지 저장소(chargePoint)가 책임진다 — lost update·중복 행 방지.
+        pointRepository.chargePoint(memberId, request.amount)
 
-        if (findPoint.isEmpty) {
-            val newPoint = Point(memberId = memberId, point = request.amount)
-            pointRepository.save(newPoint)
-            savePointHistory(memberId, request.amount, request.amount)
-        }
+        val currentPoint = pointRepository.findPointByMemberId(memberId)
+            .orElseThrow { PointNotFoundException() }
+            .point
+
+        savePointHistory(memberId, currentPoint, request.amount)
     }
 
     private fun savePointHistory(memberId: Long, currentPoint: Int, chargedPoint: Int) {
