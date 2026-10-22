@@ -1,0 +1,17 @@
+SQL: SELECT id, title, location, first_concerted_at, last_concerted_at FROM bench_concert_paging_large
+
+--- EXPLAIN ---
+table=bench_concert_paging_large type=ALL key=null rows=99889 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 268.000000ms
+rep2 = 148.000000ms
+rep3 = 71.500000ms
+rep4 = 14.500000ms
+rep5 = 13.300000ms
+median = 71.500000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Table scan on bench_concert_paging_large  (cost=10469 rows=99889) (actual time=15.8..268 rows=100000 loops=1)
+
+

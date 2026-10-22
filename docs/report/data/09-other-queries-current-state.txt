@@ -1,0 +1,17 @@
+=== findByScheduleIdAndSeatIds ===
+SQL: SELECT * FROM seat WHERE schedule_id = 5000 AND id IN (450001,450002,450003)
+table=seat type=range key=PRIMARY rows=3 filtered=1.67 Extra=Using where
+
+=== findConcertDetailById ===
+SQL: SELECT c.id, c.title, c.location, MAX(s.viewing_time), MIN(s.concerted_at), MAX(s.concerted_at) FROM concert c LEFT JOIN schedules s ON c.id = s.concert_id WHERE c.id = 500 GROUP BY c.id, c.title, c.location
+table=c type=const key=PRIMARY rows=1 filtered=100.0 Extra=null
+table=s type=ref key=idx_concert_id_concerted_at rows=5 filtered=100.0 Extra=null
+
+=== findByLoginId ===
+SQL: SELECT * FROM member WHERE login_id = 'user00000777'
+table=member type=const key=UKenfm5patwjqulw8k4wwuo6f60 rows=1 filtered=100.0 Extra=null
+
+=== point.findByMemberId ===
+SQL: SELECT * FROM point WHERE member_id = 777
+table=point type=const key=UKe89kvxel18suao0yk1h4bsc3 rows=1 filtered=100.0 Extra=null
+

@@ -1,0 +1,18 @@
+SQL: SELECT id, title, location, first_concerted_at, last_concerted_at FROM bench_concert_paging_large ORDER BY id LIMIT 20 OFFSET 99960
+
+--- EXPLAIN ---
+table=bench_concert_paging_large type=index key=PRIMARY rows=99889 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 53.900000ms
+rep2 = 15.100000ms
+rep3 = 18.900000ms
+rep4 = 16.000000ms
+rep5 = 14.800000ms
+median = 16.000000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Limit/Offset: 20/99960 row(s)  (cost=10109 rows=0) (actual time=53.9..53.9 rows=20 loops=1)
+    -> Index scan on bench_concert_paging_large using PRIMARY  (cost=10109 rows=99889) (actual time=0.0153..52.1 rows=99980 loops=1)
+
+

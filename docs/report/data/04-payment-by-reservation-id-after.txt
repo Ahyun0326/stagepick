@@ -1,0 +1,17 @@
+SQL: SELECT * FROM payment WHERE reservation_id = 777
+
+--- EXPLAIN ---
+table=payment type=const key=uk_payment_reservation_id rows=1 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.000084ms
+rep2 = 0.000041ms
+rep3 = 0.000042ms
+rep4 = 0.000084ms
+rep5 = 0.000042ms
+median = 0.000042ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Rows fetched before execution  (cost=0..0 rows=1) (actual time=42e-6..84e-6 rows=1 loops=1)
+
+

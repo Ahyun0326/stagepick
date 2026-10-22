@@ -1,0 +1,18 @@
+SQL: SELECT * FROM schedules WHERE concert_id = 500
+
+--- EXPLAIN ---
+table=schedules type=ALL key=null rows=9976 filtered=10.0 Extra=Using where
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 1.470000ms
+rep2 = 1.630000ms
+rep3 = 1.650000ms
+rep4 = 1.500000ms
+rep5 = 1.510000ms
+median = 1.510000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Filter: (schedules.concert_id = 500)  (cost=1022 rows=998) (actual time=1.14..1.47 rows=5 loops=1)
+    -> Table scan on schedules  (cost=1022 rows=9976) (actual time=0.0947..1.23 rows=10000 loops=1)
+
+

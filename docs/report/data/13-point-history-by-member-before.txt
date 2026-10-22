@@ -1,0 +1,20 @@
+SQL: SELECT * FROM point_history WHERE member_id = 777 ORDER BY created_at DESC LIMIT 20
+
+--- EXPLAIN ---
+table=point_history type=ALL key=null rows=298914 filtered=10.0 Extra=Using where; Using filesort
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 72.000000ms
+rep2 = 59.400000ms
+rep3 = 56.600000ms
+rep4 = 55.600000ms
+rep5 = 60.500000ms
+median = 59.400000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Limit: 20 row(s)  (cost=31206 rows=20) (actual time=72..72 rows=3 loops=1)
+    -> Sort: point_history.created_at DESC, limit input to 20 row(s) per chunk  (cost=31206 rows=298914) (actual time=72..72 rows=3 loops=1)
+        -> Filter: (point_history.member_id = 777)  (cost=31206 rows=298914) (actual time=0.736..72 rows=3 loops=1)
+            -> Table scan on point_history  (cost=31206 rows=298914) (actual time=0.298..64.4 rows=300000 loops=1)
+
+

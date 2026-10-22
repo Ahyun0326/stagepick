@@ -37,7 +37,11 @@ out/
 ### VS Code ###
 .vscode/
 
-data
+# 로컬 docker 볼륨(MySQL·Redis) — 루트만 제외 (docs/report/data 등은 추적)
+/data/
+
+# Kotlin 컴파일러 캐시
+.kotlin/
 
 # Terraform
 **/.terraform/

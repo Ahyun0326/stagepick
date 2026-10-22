@@ -1,317 +1,771 @@
-# STEP 4 선택 심화 ② — 주요 기능별 동시성 테스트
+# Step 4 선택 심화 ② 기능별 동시성 테스트 보고서
 
-> 항해플러스 STEP 4 "DB 구조로 데이터 정합성 확보" 선택 심화 ②.
-> 채점 기준: *"동시성 테스트는 성공하는 것이 목적이 아니라, 어떤 기능에 동시성 이슈가 예민할지
-> 미리 리스트업하고 작성하여 Rule로 가두는 것을 목적으로 합니다."*
-> 이 문서의 모든 수치는 `./gradlew test`로 실제 실행해 측정한 값이며, 측정하지 않은 수치는 적지 않았다.
-> 재현(RED)은 실제로 git stash로 수정 전 코드를 복원해 돌린 결과이고, 수정 후(GREEN)도 같은 방식으로
-> 재확인했다 — 추측이 아니라 두 상태를 모두 실행해서 비교했다.
-
----
-
-## 1. 요약
-
-1. **좌석 예약·결제 확정/만료 해제는 이미 완료된 영역**이다(필수 ①②③, 분산락 + 조건부 UPDATE + Redis Lua). 이번 선택 심화 ②는 그 바깥의 세 영역 — **포인트, 결제 멱등성, 대기열 정원** — 에서 동시성 위험을 리스트업하고 실측으로 검증했다.
-2. **셋 다 "위험도 상"으로 분류**했고, 전부 **RED(재현 또는 재현 시도) → 수정 → GREEN**의 실측 사이클을 돌렸다.
-   - **포인트 충전**: 원본 코드(`find → 메모리에서 계산 → save()`)는 신규 회원 동시 충전 시 실제로 **중복 행 3개가 생성**되는 것을 실측으로 확인했다(`IncorrectResultSizeDataAccessException`). 조건부 UPDATE로 바꾸는 중간 단계에서 **또 다른 버그를 하나 더 발견**했다 — 자세한 내용은 §4.1.
-   - **결제 멱등성**: 분산락이 **이미 완전히 직렬화**하고 있어 정상 시나리오에서는 재현되지 않았다(실측 확인). 그럼에도 "DB가 마지막 방어선" 원칙에 따라 `payment.reservation_id`에 UNIQUE 제약을 추가했고, **락을 거치지 않고 저장소를 직접 두드리면 원본 코드가 중복 결제 10건을 모두 허용**하는 것을 실측으로 확인했다(§4.2).
-   - **대기열 정원**: `countActive` 후 `saveActive`를 따로 호출하는 원본 코드는 정원 5명에 **20명 중 18명이 발급**되는 정원 초과를 실측으로 재현했다(§4.3).
-3. **리스트업 과정에서 포인트 쪽에 원래 계획보다 깊은 버그를 하나 더 발견하고 고쳤다**: "조건부 UPDATE 실패 시 insert로 새 행을 만들고, insert가 UNIQUE 위반으로 실패하면 같은 트랜잭션에서 다시 조건부 UPDATE로 재시도"하는 1차 수정은 **Hibernate가 제약 위반 이후 세션을 더 이상 정상적으로 쓸 수 없는 상태로 만들어, 재시도한 UPDATE가 조용히 롤백**되는 것을 실측으로 발견했다(§4.1 — `expected:<15000> but was:<13000>`). 최종적으로는 `INSERT ... ON DUPLICATE KEY UPDATE` 네이티브 UPSERT 한 문장으로 바꿔 근본적으로 해결했다.
-4. **위험도 중 하나(회원가입 loginId 중복)는 고치지 않고 현재 동작을 테스트로 고정**했다 — 데이터 정합성(중복 행)은 이미 안전하지만 에러 코드 품질(500 vs 409)은 범위 밖으로 남겼다.
-5. **전체 테스트는 120개로 늘어 전부 통과**한다(기존 112개 + 이번에 추가한 8개). 새 동시성 테스트 4개 클래스(8개 테스트)는 총 약 1.5초 안에 끝난다. (코드 리뷰 반영 후 124개로 늘었다 — §7, §12)
+> 동시성 테스트의 목적은 "통과"가 아니라 "어떤 기능이 경합에 예민한지 미리 리스트업하고, 그 리스트업을
+> 하나도 빠짐없이 테스트로 Rule에 가두는 것"이다. 위험도 상 3건(이전 세션)과, 사용자 결정으로 범위에
+> 포함한 대기열 승격 멀티 인스턴스 경합(이번 추가 보완, 원래는 "중")까지 총 4건을 실제로
+> 고쳤고(RED→GREEN 실측), 나머지 중·하 등급과 이번에 새로 찾은 리프레시 토큰 경합은 고치지 않되
+> **현재 동작을 테스트로 고정**했다. 모든 수치는 `./gradlew test`로 실제 실행해 측정했고, 측정하지
+> 않은 수치는 적지 않았다.
 
 ---
 
-## 2. 리스트업 — 기능별 동시성 위험도
+## 0. 한눈에 보기
 
-| # | 기능 | 경합 시나리오 | 현재(수정 전) 방어 | 위험도 | 근거 |
-|---|---|---|---|:---:|---|
-| 1 | 좌석 예약 | 같은 좌석 N명 동시 요청 | 분산락(`schedule:{id}:seat-reservation`) + 조건부 UPDATE(`holdAvailableSeats`) | — | **완료** (필수 ③, `ConcurrentSeatReservationIntegrationTest`) |
-| 2 | 결제 확정 vs 만료 해제 | 결제 확정과 홀드 만료 스케줄러가 동시에 같은 좌석을 건드림 | 조건부 UPDATE(`confirmHeldSeats`/`releaseHeldSeats`) + Redis Lua 원자 정리 | — | **완료** (`2026-10-20-g-fix-review.md` 재리뷰 APPROVE) |
-| 3 | **포인트 충전** | 같은 회원이 동시에 N번 충전 | 없음(`find → 계산 → save()`, 분산락 없음) | **상** | 돈(잔액) 직접 영향, lost update는 사용자가 "충전했는데 안 늘었다"로 바로 체감. §4.1에서 실제로 **중복 행 생성**까지 재현됨 |
-| 4 | **포인트 차감(결제)** | 같은 회원의 **다른 예약 2건**을 동시에 결제 | 분산락이 **예약 단위**(`reservation:{id}:payment`)라 다른 예약끼리는 보호 안 됨 | **상** | 돈(잔액) 직접 영향. 두 결제가 같은 포인트 행을 두고 경합 |
-| 5 | **결제 멱등성** | 같은 예약을 동시에 여러 번 결제 | 분산락(`reservation:{id}:payment`, 커밋 후 해제) + `findByReservationId` 중복 검사, **DB UNIQUE 없음** | **상** | 결제 중복 생성 = 환불 처리 필요한 장애. 락의 leaseTime(3초) 고정이라는 구조적 한계가 이미 handoff에 기록돼 있었음 |
-| 6 | **대기열 토큰 발급 정원** | 정원 바로 아래에서 여러 명이 동시 발급 시도 | `countActive` 조회 후 `saveActive` 호출(check-then-act, Redis 비원자) | **상** | 정원이 서비스의 핵심 약속(서버 보호용 트래픽 제한)인데, 몰리는 시점에 가장 취약함 |
-| 7 | 대기열 토큰 발급 중복(같은 회원) | 같은 회원이 토큰을 동시에 두 번 요청(재시도, 멀티 탭) | 위 6과 같은 원자화로 **부수적으로 해결됨** | — | §4.3에서 Lua EVAL의 직렬 실행 특성으로 같이 닫힘(별도 수정 불필요) |
-| 8 | 회원가입 loginId 중복 | 같은 loginId로 동시 가입 | `findByLoginId` 중복 검사(check-then-act) + DB `UNIQUE` 제약(데이터 정합성은 안전) | **중** | 중복 **행**은 생기지 않음(UNIQUE가 막음). 다만 패자가 받는 예외가 도메인 예외가 아니라 번역된 `DataIntegrityViolationException`이라 HTTP 500으로 빠짐 — UX 품질 문제, 돈·재고 영향 없음 |
-| 9 | 대기열 승격(`PromoteQueueTokenService`) 멀티 인스턴스 경합 | 여러 서버 인스턴스의 스케줄러가 동시에 같은 스케줄을 승격 | 단일 인스턴스에선 `@Scheduled`가 단일 스레드라 안전 | **중** | 현재 배포는 Worker Service 1대(싱글 인스턴스 가정)라 당장은 안전. 멀티 인스턴스로 스케일하면 `availableSlots` 계산이 stale해질 수 있음. 테스트로 실측하지 않음(단일 JVM에서 멀티 인스턴스 경합을 사실적으로 재현하기 어려움) |
-| 10 | 대기열 토큰 반납(결제 완료) vs 검증(다른 탭의 좌석 조회) | 결제 완료로 토큰이 막 반납되는 순간, 같은 사용자의 다른 탭이 좌석 조회 요청 | 없음 | **하** | 돈·재고 영향 없음. 최악의 경우 그 순간의 요청 1건이 "토큰 무효"로 거절되고 재발급하면 해결됨 |
+### 과제 요구사항 충족표
 
-> **"상" 3건(포인트, 결제 멱등성, 대기열 정원) 모두 §4에서 실측 RED → 수정 → GREEN을 거쳤다.**
-> **"중" 1건(loginId 중복)은 §5에서 현재 동작을 고정하는 테스트만 추가했다.**
+| 요구사항(원문 문구 단위) | 이 보고서의 답 | 위치 |
+|---|---|---|
+| 어떤 기능이 동시성 이슈에 예민할지 **리스트업** | 좌석·결제·만료 스케줄러·포인트·대기열(발급/승격/만료/반납)·토큰 검증·회원가입·인증까지 전체 쓰기 경로를 훑어 **17개 행**으로 리스트업(완료 5 · 상 6 · 중 3 · 하 3) | §3 |
+| 리스트업한 것을 **테스트로 작성** | 위험도 상 3건 + 이번에 범위로 끌어온 중 1건(대기열 승격, ADR-7)까지 총 4건은 RED→수정→GREEN 실측, 나머지 중·하 5건(그중 2건은 이번에 새로 찾음)은 현재 동작을 고정하는 테스트 추가 | §4, §5 |
+| 테스트로 **Rule에 가두기** | 17개 행 중 16개 행이 테스트에 연결됨. #17(로그인 signIn 시 리프레시 토큰 덮어쓰기)은 멀티 디바이스 정책이 미정이라 별도 테스트 없이 리스트업만 함 | §6 |
 
----
+### 핵심 결과 표 (실측)
 
-## 3. 재현 방법론
-
-- 모든 RED 측정은 **실제로 `git stash`로 수정 전 커밋 상태의 프로덕션 코드를 복원**한 뒤 동시성 테스트를 실행해서 얻은 값이다. 추측이나 코드 리딩만으로 쓴 수치는 없다.
-- 복원 → 측정 → `git stash pop`으로 복구 → 재측정(GREEN 확인)까지 각 영역(포인트/결제/대기열)마다 반복했다.
-- 동시성 테스트는 모두 `CountDownLatch` 기반 출발선 패턴(`runConcurrently`/`runConcurrentlyCollecting`, `src/test/java/kr/hhplus/be/server/support/ConcurrencyTestSupport.kt`)으로 스레드를 동시에 출발시킨다. 기존 `ConcurrentSeatReservationIntegrationTest`의 private 헬퍼를 공용으로 추출해 재사용했다.
-- 테스트에는 `@Transactional`을 쓰지 않았다(분산락이 커밋 후 해제되는 구조라 테스트 트랜잭션 롤백 방식과 충돌하기 때문 — 기존 필수 테스트와 동일한 제약).
+| 경합 | 수정 전(RED 실측) | 수정 후(GREEN 실측) | 지키는 테스트 |
+|---|---|---|---|
+| 포인트 신규 최초 충전(동시 3스레드) | `IncorrectResultSizeDataAccessException`(중복 행 3개 생성) | 15,000원 정확 일치 | `PointConcurrencyIntegrationTest` |
+| 포인트 차감(다른 예약 2건 동시 결제) | 재현 안 됨(3회 시도) — 그래도 조건부 UPDATE로 수정 | 항상 안전(코드상 보장) | `PointConcurrencyIntegrationTest` |
+| 포인트 충전+차감 **혼합** 동시(이번 보완) | (기존 수정 범위로 이미 방어) | `765,000`원(1,000,000+15×1,000−5×50,000) 정확 일치 | `PointConcurrencyIntegrationTest` |
+| 결제 멱등성(락 우회, 순차 2회) | 중복 결제 허용(예외 없음) | `DuplicatePaymentException` | `PaymentIdempotencyConcurrencyIntegrationTest` |
+| 결제 멱등성(락 우회, 10 동시) | `expected:<1> but was:<10>` | 1건만 성공, 9건 예외 | `PaymentIdempotencyConcurrencyIntegrationTest` |
+| 대기열 발급 정원(정원 5, 신규 20명) | `expected:<5> but was:<18>` | 정확히 5명 | `QueueCapacityConcurrencyIntegrationTest` |
+| **대기열 승격 멀티 인스턴스**(정원 5, 인스턴스 10, 이번 추가 보완) | `expected:<5L> but was:<50L>`(check-then-act, 정원의 10배 승격) | 정확히 5명(`ActiveQueueRepository.promote` Lua EVAL로 원자화, ADR-7) | `QueueTokenLifecycleConcurrencyIntegrationTest` |
+| **리프레시 토큰 동시 회전**(이번 신규 발견) | **미수정 — 실측: 2건 모두 성공, 그중 하나는 저장되지 않는 유령 토큰** | 동일(위험 인지, 사용자 결정: 기록만 하고 나중에 처리 — ADR-6) | `RefreshTokenRotationConcurrencyIntegrationTest` |
 
 ---
 
-## 4. 위험도 "상" — RED → 수정 → GREEN
+## 1. 배경과 목표
+
+필수 ①②③(좌석 예약·결제·만료 해제)은 이미 분산락 + 조건부 UPDATE + Redis Lua로 방어돼 있다. 이번
+선택 심화 ②의 범위는 그 바깥이다 — **포인트, 결제 멱등성, 대기열 정원**(상), **대기열 승격·토큰
+반납/검증/만료, 회원가입, 인증(리프레시 토큰)**(중·하)까지 쓰기 경로 전체를 다시 훑어 "경합 후보
+빠짐없이 찾기 → 실측 → 테스트로 고정"을 완성한다.
+
+이전 세션(2026-10-21)에서 위험도 "상" 3건은 이미 고쳤다. 이번 보완 세션의 목표는 두 가지다.
+
+1. **리스트업 재점검**: 이미 다른 테스트가 지키고 있는 영역(좌석, 결제-만료 경합)도 표에 포함해
+   전체 그림을 완성하고, 빠진 경합 후보(대기열 승격/반납/만료, 리프레시 토큰)를 추가로 찾는다.
+2. **테스트 없는 항목을 테스트로 채운다** — 고치지 않기로 한 위험(중·하)도 "현재 동작"을 테스트로
+   고정해, 나중에 누군가 실수로 더 나쁘게 바꾸면 테스트가 걸리도록 만든다.
+
+**이번 보완 세션에서 프로덕션 코드는 변경하지 않았다** — 테스트 5개(신규 파일 2개 + 기존 파일 1개에
+1개 추가)와 이 보고서만 변경했다. 위험도 상 3건의 프로덕션 수정은 이전 세션 것 그대로다(§4, §7).
+
+---
+
+## 2. 실험 설계
+
+재현 방법론은 이전 세션과 동일한 원칙을 유지했다.
+
+- **RED 재현**: 위험도 "상" 3건은 `git stash`로 수정 전 프로덕션 코드를 실제로 복원해 측정했다(추측
+  아님). 이번 보완 세션에서 추가한 항목(승격/반납/만료/리프레시 토큰)은 애초에 수정하지 않기로
+  했으므로 "RED"가 곧 "현재 코드의 실측값"이다 — 별도로 되돌릴 필요가 없다.
+- **출발선 래치**: 모든 동시성 테스트는 `CountDownLatch` 기반 출발선 패턴
+  (`runConcurrently`/`runConcurrentlyCollecting`, `src/test/java/kr/hhplus/be/server/support/ConcurrencyTestSupport.kt`)으로
+  스레드를 동시에 출발시킨다.
+- **스레드 수**: 클래스별 10~20 (대기열 승격 테스트는 "인스턴스" 10개 × 대기자 50명).
+- **락 경유 여부**: 위험도 "상"의 결제 멱등성 테스트는 "락을 경유"(직렬화됨, 재현 안 됨)와 "락을
+  우회해 저장소를 직접 두드림"(DB 단독 방어선 검증) 두 경로를 모두 측정했다.
+- **반복**: 타이밍에 의존하는 레이스(대기열 반납-vs-검증, 만료-vs-발급 북키핑)는 1회만으로는
+  두 분기를 다 보장할 수 없어 각각 50회·100회 반복하고 분포를 실측했다.
+- **완료 기준**: `./gradlew test`(기본, perf 태그 제외) 전체 통과 + 각 신규 테스트의 println 실측값을
+  이 보고서에 그대로 옮긴다. 플레이키 방지를 위해 모든 저장소 호출에 타임아웃(30초 await)을 둔다.
+- **재현 명령**:
+  ```bash
+  ./gradlew test --tests "kr.hhplus.be.server.concurrency.*"
+  ./gradlew clean test   # 전체 회귀
+  ```
+
+---
+
+## 3. 리스트업 — 쓰기 경로 전체 재점검
+
+> "현재 방어선" 열의 "완료"는 필수 ①②③ 또는 이전 세션에서 이미 고친 것, "이번 보완"은 이번
+> 세션에서 새로 테스트를 추가한 것이다.
+
+| # | 기능 | 경합 시나리오 | 현재 방어선 | 위험도 | 근거(돈·재고·정원 영향, 발생 조건) | 조치 | 테스트 |
+|---|---|---|---|:---:|---|---|---|
+| 1 | 좌석 예약(홀드) | 같은 좌석 N명 동시 요청 | 분산락(`schedule:{id}:seat-reservation`) + 조건부 UPDATE(`holdAvailableSeats`) | — | 완료(필수 ③) | 완료 | `ConcurrentSeatReservationIntegrationTest` |
+| 2 | 좌석 예약(홀드), 락 우회 | 분산락 없이 트랜잭션 여러 개가 같은 좌석을 동시 홀드 | DB 조건부 UPDATE(`status='AVAILABLE'`)가 최후 방어선 | — | 완료 | 완료 | `SeatRepositoryIntegrationTest`(`분산락 없이 여러 트랜잭션이 동시에 같은 좌석을 홀드해도 DB가 한 건만 허용한다`) |
+| 3 | 결제 확정 vs 홀드 만료 스케줄러 | 결제 확정과 만료 스케줄러가 동시에 같은 좌석을 건드림(TOCTOU) | `confirmHeldSeats`(`HOLD` + `reservation_id` 조건부 UPDATE) — `2026-10-20-g-fix-review.md` CRITICAL 1 수정 | — | 완료 | 완료 | `SeatRepositoryIntegrationTest`(`만료 처리로 이미 풀린 좌석은 결제 확정되지 않는다`, `다른 예약이 잡은 좌석은 결제 확정되지 않는다`) |
+| 4 | 좌석 홀드 만료 정리 vs 재홀드(ABA) | 만료 처리가 좌석 ID만으로 Redis를 지우다 막 재홀드된 항목까지 지움 | `REMOVE_EXPIRED_SCRIPT`(ZSCORE ≤ now인 것만 CAS 삭제) — 같은 리뷰 CRITICAL 2 수정 | — | 완료 | 완료 | `SeatHoldRedisRepositoryIntegrationTest` |
+| 5 | 결제 완료 vs 만료 처리 중복 정리 | 결제가 끝난 좌석에 만료 큐 항목이 뒤늦게 남아 있을 때 만료 처리가 끼어듦 | afterCommit 정리 + `WHERE status='HOLD'` 조건 | — | 완료 | 완료 | `PaymentFailureRollbackIntegrationTest`(`결제가 끝난 좌석에 만료 항목이 남아 있어도 만료 처리는 좌석을 되돌리지 않는다`) |
+| 6 | **포인트 충전** | 같은 회원이 동시에 N번 충전(신규 회원 최초 충전 포함) | 없음(원본) → `chargePoint` UPSERT(수정) | **상** | 돈(잔액) 직접 영향. 신규 회원 동시 충전 시 중복 행까지 생성됨(실측) | **수정함**(이전 세션) | `PointConcurrencyIntegrationTest` |
+| 7 | **포인트 차감(결제)** | 같은 회원의 다른 예약 2건을 동시에 결제 | 분산락이 예약 단위라 보호 안 됨(원본) → `usePoint` 조건부 UPDATE(수정) | **상** | 돈(잔액) 직접 영향 | **수정함**(이전 세션) | `PointConcurrencyIntegrationTest` |
+| 8 | 포인트 충전+차감 **혼합**(이번 보완) | 같은 회원이 충전(+)과 결제 차감(−)을 동시에 수행 | #6·#7과 같은 UPSERT/조건부 UPDATE — 혼합 시나리오는 이번에 처음 테스트 | **상**(기존 수정 범위) | 돈(잔액) 직접 영향 | 기존 수정으로 이미 방어됨, 이번에 **테스트로 실측 확인**만 추가 | `PointConcurrencyIntegrationTest`(신규) |
+| 9 | **결제 멱등성** | 같은 예약을 동시에 여러 번 결제 | 분산락(커밋 후 해제) + `findByReservationId`(원본, DB UNIQUE 없음) → `payment.reservation_id` UNIQUE(수정) | **상** | 결제 중복 생성 = 환불 필요 장애 | **수정함**(이전 세션) | `PaymentIdempotencyConcurrencyIntegrationTest` |
+| 10 | **대기열 토큰 발급 정원** | 정원 바로 아래에서 여러 명이 동시 발급 시도 | `countActive`→`saveActive`(원본, check-then-act) → `tryIssueActive` Lua(수정) | **상** | 정원은 서버 보호용 트래픽 제한의 핵심 약속 | **수정함**(이전 세션) | `QueueCapacityConcurrencyIntegrationTest` |
+| 11 | 대기열 토큰 발급 중복(같은 회원) | 같은 회원이 토큰을 동시에 두 번 요청(재시도, 멀티 탭) | #10과 같은 Lua 원자화로 부수적으로 해결 | **상**(부수 해결) | 활성 인원 중복 집계 방지 | **수정함**(이전 세션) | `QueueCapacityConcurrencyIntegrationTest` |
+| 12 | 회원가입 loginId 중복 | 같은 loginId로 동시 가입 | `findByLoginId` 중복 검사(check-then-act) + DB UNIQUE | **중** | 중복 **행**은 안 생김(UNIQUE가 막음). 패자가 도메인 예외 대신 `DataIntegrityViolationException`(HTTP 500)을 받음 — UX 품질 문제, 돈·재고 영향 없음 | 현재 동작 고정 | `MemberLoginIdConcurrencyIntegrationTest` |
+| 13 | **대기열 승격 멀티 인스턴스**(이번 추가 보완) | 여러 서버 인스턴스의 스케줄러가 동시에 같은 스케줄을 승격 | `countActive`→`saveActive`(check-then-act, 원자화 안 됨) → `ActiveQueueRepository.promote` Lua EVAL(수정, ADR-7) | **중**(발생 시 정원 영향은 직접적이라 "상"에 준함) | 정원 초과 승격 가능. 현재 배포는 단일 인스턴스라 당장 위험은 낮지만, 멀티 인스턴스로 스케일하면 실제로 발생 — **RED 실측: 정원 5인데 활성 50명(10배)** | **수정함**(이번 추가 보완) — **GREEN 실측: 정확히 정원(5명)** | `QueueTokenLifecycleConcurrencyIntegrationTest` |
+| 14 | 대기열 토큰 반납 vs 검증(이번 보완) | 결제 완료로 토큰이 반납되는 순간, 다른 탭의 좌석 조회가 토큰을 검증 | 없음(동기화 없음) | **하** | 돈·재고 영향 없음. 최악의 경우 그 순간의 요청 1건이 "토큰 무효"로 거절되고 재발급하면 해결 | 현재 동작 고정 — **실측: 50회 중 검증 성공 16 / 거절 34, 둘 다 정상 분기** | `QueueTokenLifecycleConcurrencyIntegrationTest` |
+| 15 | 대기열 만료 정리 vs 신규 발급 북키핑(이번 보완, **새로 발견**) | `removeExpiredActive`가 "정리→스케줄 집합에서 제거"를 비원자적 2단계로 수행, 그 사이 신규 발급이 끼면 방금 추가된 scheduleId를 다시 지울 수 있음 | 없음 | **하** | 돈·재고 영향 없음. 스케줄 북키핑 집합만 일시적으로 어긋나 다음 신규 발급 전까지 그 스케줄의 만료·승격 처리가 누락될 수 있음(활성 데이터 자체는 안 깨짐) | 현재 동작 고정 — **실측: 100회 반복 중 재현 0회**(§5, §9) | `QueueTokenLifecycleConcurrencyIntegrationTest` |
+| 16 | **리프레시 토큰 동시 회전**(이번 보완, **새로 발견**) | 같은 refreshToken으로 동시에 두 번 갱신(네트워크 재시도, 중복 탭) | `find`→비교→`save`(check-then-act, 회원당 Redis key 1개, 락 없음) | **중**(세션 영향) | 돈·재고 영향 없음. 로그인 세션에는 영향 — 이긴 쪽만 유효한 새 토큰을 갖고, 진 쪽은 방금 받은 토큰이 무효화돼 재로그인해야 함 | 현재 동작 고정(위험 인지, **사용자 결정: 기록만 하고 나중에 처리** — ADR-6) — **실측: 2건 모두 성공, 한쪽 유령화** | `RefreshTokenRotationConcurrencyIntegrationTest` |
+| 17 | 로그인(signIn) 시 리프레시 토큰 덮어쓰기 | 같은 사용자가 여러 기기/탭에서 동시 로그인 | #16과 같은 저장 메커니즘(회원당 key 1개, 마지막 쓰기가 남음) | 하 | "마지막 로그인한 기기만 유효"가 의도된 정책일 수도 있어(멀티 디바이스 정책 미정) 리스트업만 함 — 별도 테스트 없음 | 리스트업만(사용자 결정 필요 — §5) | — |
+
+**리스트업 변경 요약**: 기존 10행(완료 2 + 상 3 + 부수해결 1 + 중 1 + 리스트업만 2)에서 **17행**으로
+확장했다. 이번에 새로 추가한 것은 #2·#4·#5(이미 다른 테스트가 지키고 있었지만 표에 없었던 것),
+#8(혼합 시나리오), #13·#14·#15(테스트 없이 리스트업만 돼 있던 것에 테스트 추가), #16·#17(전면
+재점검 중 새로 발견).
+
+---
+
+## 4. 항목별 분석 — 위험도 "상" (수정 완료, 이전 세션)
 
 ### 4.1 포인트 충전/차감 — lost update, 그리고 발견한 또 다른 버그
 
 **재현 테스트**: `src/test/java/kr/hhplus/be/server/concurrency/PointConcurrencyIntegrationTest.kt`
 
-#### (a) 같은 회원이 동시에 15번 충전 (1,000원씩, 기대 합계 15,000원)
+#### 문제 / 원인
+
+```mermaid
+sequenceDiagram
+    participant T1 as 스레드1(충전 1,000원)
+    participant T2 as 스레드2(충전 1,000원)
+    participant DB as point 테이블(수정 전, UNIQUE 없음)
+
+    T1->>DB: findPointByMemberId(1) → 행 없음
+    T2->>DB: findPointByMemberId(1) → 행 없음
+    Note over T1,T2: 둘 다 "신규 회원"으로 판단
+    T1->>T1: 메모리에서 0 + 1,000 = 1,000 계산
+    T2->>T2: 메모리에서 0 + 1,000 = 1,000 계산
+    T1->>DB: save() → INSERT(member_id=1, point=1,000)
+    T2->>DB: save() → INSERT(member_id=1, point=1,000)
+    Note over DB: 실측(3스레드 동시): IncorrectResultSizeDataAccessException<br/>"3 results were returned" — 중복 행 3개 생성
+```
 
 | 단계 | 코드 상태 | 실측 결과 |
 |---|---|---|
-| RED (원본) | `ChargePointService`가 `findPointByMemberId` → `Point.chargeAndGetRemained()`(메모리 계산) → `pointRepository.save()`. 분산락 없음. `point.member_id`에 UNIQUE 없음 | **`org.springframework.dao.IncorrectResultSizeDataAccessException: Query did not return a unique result: 3 results were returned`** — 신규 회원이라 "행 없음"을 **동시에 3개 스레드가 보고 각자 INSERT**, 중복 행 3개 생성 |
-| 중간 수정 (1차 시도) | 조건부 UPDATE(`chargePoint`)를 추가하고, 0건이면 `save()`로 새 행 생성 → **UNIQUE(member_id) 위반을 catch해서 같은 트랜잭션에서 조건부 UPDATE로 재시도** | **`expected:<15000> but was:<13000>`** — 중복 행은 더 안 생겼지만, 2번의 충전(2,000원)이 사라짐. 아래 §원인 참고 |
-| GREEN (최종) | `INSERT ... ON DUPLICATE KEY UPDATE`(네이티브 UPSERT) **한 문장**으로 "있으면 더하고 없으면 만들기"를 원자화 | **15,000원 정확히 일치** (3회 재실행 모두 통과) |
+| RED(원본) | `find → 메모리 계산 → save()`, 분산락 없음, UNIQUE 없음 | **`IncorrectResultSizeDataAccessException`: 3 results were returned** — 중복 행 3개 생성 |
+| 중간 수정(1차 시도) | 조건부 UPDATE 추가 + UNIQUE 위반 시 같은 트랜잭션에서 재시도 | **`expected:<15000> but was:<13000>`** — 충전 2건(2,000원) 소실 |
+| GREEN(최종) | `INSERT ... ON DUPLICATE KEY UPDATE` 네이티브 UPSERT 한 문장 | **15,000원 정확 일치**(3회 재실행 모두 통과) |
 
-**중간 수정이 실패한 원인(실측으로 확인)**: Hibernate/JPA는 `save()`가 제약 위반(`DataIntegrityViolationException`)으로 실패하면, 그 예외를 애플리케이션이 catch해서 무시해도 **같은 트랜잭션·같은 EntityManager로는 더 이상 안전하게 flush할 수 없는 상태**가 된다. 그 상태에서 재시도한 조건부 UPDATE(JPQL bulk update)는 겉보기엔 실행되지만, 전체 `@Transactional` 메서드가 커밋을 시도할 때 **조용히 롤백**될 수 있다는 것을 실측으로 확인했다(테스트 코드 자체는 예외 없이 끝났지만 DB에 반영되지 않음). 이 패턴("insert 실패 → catch → 같은 트랜잭션에서 재시도")은 일반적으로 위험하다는 것을 이번에 직접 겪었다 — **최종 해결은 재시도 자체를 없애고 DB 레벨 UPSERT로 바꾸는 것**이었다.
+**중간 수정이 실패한 원인(실측)**: Hibernate는 `save()`가 제약 위반으로 실패하면, 애플리케이션이
+예외를 catch해도 같은 트랜잭션·같은 EntityManager로는 더 이상 안전하게 flush할 수 없는 상태로 만든다.
+재시도한 조건부 UPDATE는 겉보기엔 실행됐지만 커밋 시점에 조용히 롤백됐다(테스트는 예외 없이 끝났지만
+DB에 반영 안 됨). **"insert 실패 → catch → 같은 트랜잭션에서 재시도"는 일반적으로 위험하다** — 최종
+해결은 재시도를 없애고 DB 레벨 UPSERT로 바꾸는 것이었다.
 
-#### (b) 같은 회원의 서로 다른 예약 2건을 동시에 결제 (락 키가 reservation 단위라 서로 보호 안 됨)
+#### 해결
+
+```mermaid
+sequenceDiagram
+    participant T1 as 스레드1(충전 1,000원)
+    participant T2 as 스레드2(충전 1,000원)
+    participant DB as point 테이블(수정 후, UNIQUE(member_id))
+
+    T1->>DB: INSERT ... ON DUPLICATE KEY UPDATE point=point+1000
+    activate DB
+    DB->>DB: member_id=1 행 잠금, 없으므로 새로 생성(point=1,000)
+    deactivate DB
+    T2->>DB: INSERT ... ON DUPLICATE KEY UPDATE point=point+1000
+    Note over T2,DB: T1의 행 잠금이 풀릴 때까지 대기(InnoDB row lock)
+    activate DB
+    DB->>DB: 잠금 획득 후 point = 1,000 + 1,000 = 2,000
+    deactivate DB
+    Note over DB: 최종 point = 2,000 (= 충전 합계, lost update 없음)
+```
+
+- `PointRepository.chargePoint`/`usePoint` 추가, `SpringPointJpa`가 네이티브 UPSERT/조건부 UPDATE로 구현.
+- `PointEntity.memberId`에 UNIQUE 추가(회원당 포인트 행 1개 보장), 중복 인덱스(`idx_member_id`) 제거.
+- `ChargePointService`/`ProcessPaymentService.processPointUsage`는 더 이상 도메인 모델을 메모리에서
+  mutate하지 않고 저장소의 원자적 연산에 위임한다. 차감 쪽은 사전 검증(빠른 실패) + 조건부 UPDATE(최후
+  방어선)를 모두 유지한다.
+
+#### 결과(RED → GREEN) — 다른 예약 2건 동시 결제
 
 | 단계 | 실측 결과 |
 |---|---|
-| RED 시도 (원본, 3회 반복) | **재현 안 됨** — 3번 모두 정상적으로 두 결제 금액이 모두 차감됨 |
-| GREEN (수정 후) | 정상 통과 (조건부 UPDATE가 적용돼 있어 더 안전해짐) |
+| RED 시도(원본, 3회 반복) | 재현 안 됨 — 3번 모두 정상 차감 |
+| GREEN(수정 후) | 정상 통과 |
 
-**재현 안 됨 + 이유**: 2개 스레드만으로는 "포인트 조회 → 검증 → 조건부 UPDATE" 사이의 임계 구간이 타이밍상 거의 겹치지 않았다(반복 3회 모두 재현 안 됨). 다만 이건 **"안전하다"는 뜻이 아니라 "이 테스트 규모로는 못 잡았다"**는 뜻이다 — 분산락이 예약 단위라 두 결제가 **코드상 전혀 직렬화되지 않는다**는 사실(§코드 분석)은 변하지 않으므로, 수정(조건부 UPDATE)은 재현 여부와 무관하게 적용했다.
+재현되지 않은 것은 "안전하다"는 뜻이 아니라 "이 테스트 규모로는 못 잡았다"는 뜻이다 — 분산락이
+예약 단위라 두 결제가 코드상 전혀 직렬화되지 않는다는 사실은 변하지 않으므로, 수정은 재현 여부와
+무관하게 적용했다.
 
-**수정 내용**:
-- `PointRepository`에 `chargePoint(memberId, amount): Int`, `usePoint(memberId, amount): Int` 추가.
-- `SpringPointJpa.chargePoint`: `INSERT INTO point (...) VALUES (...) ON DUPLICATE KEY UPDATE point = point + :amount, ...` (네이티브 쿼리).
-- `SpringPointJpa.usePoint`: `UPDATE PointEntity p SET p.point = p.point - :amount WHERE p.memberId = :memberId AND p.point >= :amount` (JPQL 조건부 UPDATE, 0건이면 잔액 부족).
-- `PointEntity.memberId`에 `@Column(unique = true)` 추가(회원당 포인트 행 1개 보장) — 기존 `idx_member_id` 인덱스는 중복이라 제거(`payment.idx_number`와 같은 패턴, §5 인덱스 보고서).
-- `ChargePointService`/`ProcessPaymentService.processPointUsage`는 이제 도메인 모델을 메모리에서 mutate하지 않고 저장소의 원자적 연산에 위임한다. 차감 쪽은 **사전 검증(빠른 실패용) + 조건부 UPDATE(최후 방어선)**를 모두 유지했다 — 사전 검증을 지나고도 조건부 UPDATE가 0건이면 `InsufficientPointException`을 던진다(단위 테스트로 검증, `ProcessPaymentServiceTest` "사전 검증 통과 후 동시 결제로 조건부 UPDATE 시점에 잔액이 부족해졌을 때").
+#### 결과(이번 보완) — 충전+차감 혼합 동시 실행
 
-**대안 검토**: 분산락으로 회원 단위(`member:{id}:point`) 락을 추가로 거는 방법도 가능했지만, (1) 결제 흐름에 락이 하나 더 늘어 데드락 순서 관리가 복잡해지고, (2) DB 조건부 UPDATE가 이미 "DB가 최후 방어선"이라는 Step4 원칙과 직접 맞아 더 적합하다고 판단했다.
+같은 회원에게 충전 15회(×1,000원)와 결제 5건(×50,000원)을 동시에 실행했다. 초기 잔액
+1,000,000원 기준 기대값은 `1,000,000 + 15,000 − 250,000 = 765,000`원이고, **실측값도 정확히
+765,000원**이었다(`PointConcurrencyIntegrationTest`, 신규). 충전(UPSERT)과 차감(조건부 UPDATE)이
+결국 같은 `point` 행에 대한 InnoDB 행 잠금으로 직렬화되므로, 두 연산이 뒤섞여도 순서와 무관하게
+정확하다는 것을 실측으로 확인했다.
 
-**새 UNIQUE 제약(`point.member_id`)의 운영 반영 주의** (코드 리뷰 HIGH 반영, `docs/agent/reviews/2026-10-21-concurrency-review.md`): `payment.reservation_id`와 같은 사정이 `point.member_id`에도 그대로 적용된다(§4.2 참고) — prod는 `ddl-auto: update`인데 Hibernate의 `update` 모드는 제약을 **추가는 시도**하지만, 추가 전에 기존 데이터의 중복을 정리해주지는 않는다(`docs/report/step4-index-report.md`에서 실측). 그런데 이번엔 한 가지가 더 있다: **이 PR이 고치는 버그 자체가 "동시 최초 충전 시 포인트 중복 행 생성"**이므로(§4.1 RED 단계에서 `IncorrectResultSizeDataAccessException`으로 실측), 운영 DB에는 수정 전 버그로 인해 `member_id`가 중복된 행이 이미 쌓여 있을 가능성이 있다(실측이 아니라 추정 — 운영 DB 접근 권한이 없어 직접 확인하지 못했다). 이 상태에서 제약을 배포하면 제약 생성 자체가 **실패**한다.
+#### 트레이드오프
 
-- **배포 전 점검 쿼리**(payment 쪽엔 없던, 이번에 추가하는 절차):
-  ```sql
-  SELECT member_id, COUNT(*) FROM point GROUP BY member_id HAVING COUNT(*) > 1;
-  ```
-  1건이라도 나오면 제약 배포를 보류하고 아래 정리가 선행되어야 한다.
-- **정리 절차(제안 — 실제 실행은 운영자 판단)**:
-  1. 중복된 `member_id`별로, 그 회원의 `point_history`(`user_id`로 연결, `point.id`가 아니라 `point.member_id`와 매칭되는 회원 단위 이력) 합계와 각 중복 행의 `point` 값을 대조해 데이터가 이미 깨져 있는지 먼저 판별한다.
-  2. 잔액을 합산해 1행(예: 가장 먼저 생성된 행)으로 병합하고 나머지 중복 행은 삭제한다. `docs/project/erd.md` 기준 `point_history`는 `member_id`(ERD 표기상 `user_id`)로만 회원과 연결되고 `point.id`를 참조하는 FK가 없으므로, 포인트 행을 병합·삭제해도 이력 조회에는 영향이 없다(ERD 확인, 실제 FK 제약은 미실측).
-  3. 병합 후 점검 쿼리로 중복 0건을 재확인한 뒤에만 제약을 배포한다.
-- 이번 세션에서는 로컬 테스트 스키마(`create-drop`, Testcontainers MySQL 8.0)로 UNIQUE 동작 자체만 확인했고, 운영 DB의 실제 중복 여부는 조사하지 않았다(§11 한계에도 기록).
+분산락으로 회원 단위(`member:{id}:point`) 락을 추가로 거는 방법도 가능했지만, (1) 결제 흐름에 락이
+하나 더 늘어 데드락 순서 관리가 복잡해지고, (2) DB 조건부 UPDATE가 이미 "DB가 최후 방어선"이라는
+Step4 원칙과 직접 맞아 더 적합하다고 판단했다. 대신 **"원자적 조건부 UPDATE만으로는 부족할 수
+있다"**는 교훈을 얻었다 — 1차 수정(재시도)이 오히려 또 다른 lost update(13,000 vs 15,000)를 만들었고,
+"고쳤다고 생각한 코드도 실제로 동시성 테스트로 다시 돌려봐야 한다"는 것을 실측으로 보여준 사례다.
+
+**새 UNIQUE 제약(`point.member_id`)의 운영 반영 주의**: prod는 `ddl-auto: update`인데, 이 모드는
+제약 추가는 시도하지만 기존 중복 데이터를 정리해주지는 않는다. 이 PR이 고치는 버그 자체가 "동시
+최초 충전 시 중복 행 생성"이므로, 운영 DB에 이미 중복이 있을 가능성이 있다(실측 아님, 운영 접근
+권한 없어 미확인). 배포 전 점검 쿼리와 정리 절차는 §8에 그대로 유지한다.
 
 ---
 
 ### 4.2 결제 멱등성 — 락은 이미 보호하지만, DB 단독 방어선은 없었다
 
-**재현 테스트**: `src/test/java/kr/hhplus/be/server/concurrency/PaymentIdempotencyConcurrencyIntegrationTest.kt` (테스트 3개)
+**재현 테스트**: `PaymentIdempotencyConcurrencyIntegrationTest.kt` (테스트 3개)
 
 | 테스트 | 경로 | RED(원본) | GREEN(수정 후) |
 |---|---|---|---|
-| 같은 예약을 분산락 경유로 동시에 N번 결제 | Facade 전체 흐름(락 포함) | **재현 안 됨** — 1번 성공 + 나머지 `DuplicatePaymentException` (정상) | 동일 (변화 없음, 락이 원래도 보호) |
-| 락 없이 저장소를 **순차** 2번 호출 | `paymentRepository.save()` 직접 | **`Expected exception DuplicatePaymentException but no exception was thrown.`** — 2번째 저장도 그냥 성공 | `DuplicatePaymentException` 발생 |
-| 락 없이 저장소를 **10개 트랜잭션 동시** 호출 | `paymentRepository.save()` 직접 × 10 | **`expected:<1> but was:<10>`** — 10개 모두 성공, 같은 reservation_id로 결제 10건 생성 | 정확히 1건 성공, 나머지 9건 `DuplicatePaymentException` |
+| 같은 예약을 분산락 경유로 동시에 N번 결제 | Facade 전체(락 포함) | 재현 안 됨 — 1성공 + 나머지 `DuplicatePaymentException`(정상) | 동일(변화 없음, 락이 원래도 보호) |
+| 락 없이 저장소를 순차 2번 호출 | `paymentRepository.save()` 직접 | **예외 없이 2번째도 성공** | `DuplicatePaymentException` 발생 |
+| 락 없이 저장소를 10개 트랜잭션 동시 호출 | `paymentRepository.save()` 직접 × 10 | **`expected:<1> but was:<10>`** — 10건 모두 성공 | 정확히 1건 성공, 나머지 9건 예외 |
 
-**락 테스트가 "재현 안 됨"인 이유(실측으로 확인)**: `LockManager.runWithLock`은 `DistributedLockTransactionProcessor.proceed()`(`@Transactional(REQUIRES_NEW)`)를 감싸고, 락 해제(`rLock.unlock()`)는 그 트랜잭션이 **커밋된 뒤**(메서드가 리턴한 뒤 `finally`)에 일어난다. 즉 같은 reservation에 대한 동시 결제 요청은 **완전히 직렬화**되고, 두 번째 요청이 락을 잡는 시점엔 첫 번째 요청의 결제 행이 이미 커밋돼 있어 `findByReservationId` 중복 검사가 정상 작동한다. 이걸 실측으로 재확인했다(수정 전/후 모두 1성공 + N-1 `DuplicatePaymentException`).
+**락 테스트가 "재현 안 됨"인 이유(실측)**: `LockManager.runWithLock`은 `DistributedLockTransactionProcessor.proceed()`(`REQUIRES_NEW`)를
+감싸고, 락 해제는 그 트랜잭션이 **커밋된 뒤** 일어난다. 즉 같은 reservation에 대한 동시 요청은
+완전히 직렬화되어, 두 번째 요청이 락을 잡는 시점엔 첫 번째 요청의 결제 행이 이미 커밋돼 있다.
 
-**그럼에도 DB UNIQUE를 추가한 이유**: 락의 `leaseTime`이 3초로 **고정값**이고(`docs/agent/handoff.md`에 이미 구조적 위험으로 기록돼 있던 지적), 네트워크 지연이나 GC pause 등으로 결제 처리가 3초를 넘기면 Redisson이 자동으로 락을 풀어 다른 요청이 끼어들 수 있다 — 이 경로는 현재 테스트로 강제 재현하기 어렵지만(타이밍 의존적), **락이 뚫렸을 때 DB가 막아줘야** "DB가 마지막 방어선"이라는 원칙에 맞는다. 실제로 **락을 거치지 않고 저장소를 직접 두드린 테스트**가 이 가정을 실측으로 증명한다 — 원본 코드는 중복 결제 10건을 모두 허용했다.
+**그럼에도 DB UNIQUE를 추가한 이유**: 락의 `leaseTime`이 3초 고정값이라, 지연이 3초를 넘기면
+Redisson이 자동으로 락을 풀어 다른 요청이 끼어들 수 있다(타이밍 의존적이라 테스트로 강제 재현은
+안 함). **락을 거치지 않고 저장소를 직접 두드린 테스트**가 "락이 없으면 원본 코드가 중복 결제 10건을
+전부 허용한다"는 것을 실측으로 증명했다 — 애플리케이션 락은 네트워크 지연·GC pause 등 가정이 깨질
+수 있어, DB 제약이 진짜 "마지막 방어선"이라는 원칙을 결제 도메인에도 일관되게 적용했다.
 
-**수정 내용**:
-- `PaymentEntity`의 `@Table`에 이름 있는 `uniqueConstraints = [UniqueConstraint(name = "uk_payment_reservation_id", columnNames = ["reservation_id"])]`를 추가(예약당 결제 1건 보장). 기존 `@Table(indexes=[idx_reservation_id])`는 제거(`payment.idx_number`와 같은 패턴).
-- `PaymentJpaRepository.save()`에서 `DataIntegrityViolationException`을 `DuplicatePaymentException`으로 변환. 기존 앱 레벨 중복 검사(`findByReservationId`)는 그대로 유지(빠른 실패용).
+**수정 내용**: `PaymentEntity`에 이름 있는 `@Table(uniqueConstraints=[uk_payment_reservation_id])`
+추가, `PaymentJpaRepository.save()`에서 그 제약 위반일 때만 `DuplicatePaymentException`으로 변환
+(제약 이름을 명시해 FK·NOT NULL 등 다른 위반과 섞이지 않게 함 — 코드 리뷰 반영, §8).
 
-**코드 리뷰 MEDIUM 반영 — 예외 변환 범위 좁히기** (`docs/agent/reviews/2026-10-21-concurrency-review.md`): 처음엔 `@JoinColumn(unique = true)`만 썼는데, 이렇게 하면 Hibernate가 제약 이름을 `UKxxxxxx` 해시값으로 임의 생성해 "이 예외가 정말 reservation_id 중복 때문인지"를 코드에서 식별할 수 없고, `PaymentJpaRepository.save()`는 FK 위반·NOT NULL 위반 등 **모든** `DataIntegrityViolationException`을 뭉뚱그려 `DuplicatePaymentException`으로 바꿔버리는 문제가 있었다. 그래서:
-1. `@Table(uniqueConstraints = [...])`로 제약 이름을 `uk_payment_reservation_id`로 직접 고정하고, `@JoinColumn`의 `unique = true`는 같은 제약이 중복 생성되는 것을 막기 위해 제거했다.
-2. `PaymentJpaRepository.save()`는 `DataIntegrityViolationException`의 원인(`cause`)이 `org.hibernate.exception.ConstraintViolationException`이고 그 `constraintName`에 `uk_payment_reservation_id`가 포함될 때만 `DuplicatePaymentException`으로 변환하고, 그 외(다른 제약 위반 등)는 그대로 전파해 원인을 숨기지 않는다.
-
-**실측(Testcontainers MySQL 8.0, 중복 저장 시도로 직접 유도)**:
-- `DataIntegrityViolationException.message` = `could not execute statement [Duplicate entry '1' for key 'payment.uk_payment_reservation_id'] [...]; constraint [payment.uk_payment_reservation_id]`
-- `cause`의 클래스 = `org.hibernate.exception.ConstraintViolationException`, `cause.mostSpecificCause`(JDBC) 클래스 = `java.sql.SQLIntegrityConstraintViolationException`, 메시지 = `Duplicate entry '1' for key 'payment.uk_payment_reservation_id'`
-- `ConstraintViolationException.constraintName` = `"payment.uk_payment_reservation_id"` — MySQL 8이 "테이블명.제약이름" 형태로 돌려준다는 것을 실측으로 확인했다. 이 접두사 포맷이 MySQL 버전/설정에 따라 달라질 수 있어, 정확히 일치(`==`)가 아니라 제약 이름이 **포함**되는지(`contains`)로 판단하도록 구현했다.
-
-**새 UNIQUE 제약의 운영 반영 주의**: `docs/agent/handoff.md`와 `docs/report/step4-index-report.md`에 이미 기록된 대로, prod는 `ddl-auto: update`인데 Hibernate의 `update` 모드는 **제약 추가는 하지만 기존 데이터의 중복을 검사하며 제약을 걸 수는 없다** — 만약 운영 DB에 이미 같은 `reservation_id`로 결제가 2건 이상 있다면 이 제약 자체가 생성에 **실패**한다(수동 마이그레이션 전 데이터 정리 필요). 이번 세션에서는 로컬 테스트 스키마(`create-drop`)로만 확인했고, 운영 데이터 중복 여부는 확인하지 않았다.
+**트레이드오프**: UNIQUE 제약은 "DB가 마지막 방어선"이라는 원칙에 맞지만, 운영 배포 시 기존 중복
+데이터가 있으면 제약 생성 자체가 실패한다(§8 배포 전 점검 절차로 대응).
 
 ---
 
 ### 4.3 대기열 토큰 발급 정원 — check-then-act를 Redis Lua로 원자화
 
-**재현 테스트**: `src/test/java/kr/hhplus/be/server/concurrency/QueueCapacityConcurrencyIntegrationTest.kt` (테스트 2개)
+**재현 테스트**: `QueueCapacityConcurrencyIntegrationTest.kt` (테스트 2개)
 
-| 테스트 | RED(원본: `countActive` 후 `saveActive`) | GREEN(수정 후: `tryIssueActive` Lua) |
+#### 문제 / 원인 (수정 전)
+
+```mermaid
+sequenceDiagram
+    participant U1 as 사용자1(신규)
+    participant U2 as 사용자2(신규)
+    participant R as Redis(활성 ZSET, 정원 5, 현재 4명)
+
+    U1->>R: countActive → 4 (5 미만이라 OK)
+    U2->>R: countActive → 4 (5 미만이라 OK)
+    Note over U1,U2: 둘 다 "정원 안 찼음"으로 판단(check)
+    U1->>R: saveActive → ZADD (act)
+    U2->>R: saveActive → ZADD (act)
+    Note over R: 최종 활성 인원 6명 (정원 5 초과)<br/>실측(20명 동시 시도, 정원 5): 18명 발급
+```
+
+#### 해결 (수정 후)
+
+```mermaid
+sequenceDiagram
+    participant U1 as 사용자1
+    participant U2 as 사용자2
+    participant R as Redis(단일 스레드로 EVAL 직렬 실행)
+
+    U1->>R: EVAL tryIssueActive (ZCOUNT 확인 + ZADD 등록을 한 번에)
+    activate R
+    R->>R: ZCOUNT=4 < 5 → 등록, 활성 5명
+    R-->>U1: 1 (허용)
+    deactivate R
+    U2->>R: EVAL tryIssueActive
+    activate R
+    R->>R: ZCOUNT=5, 5 미만 아님 → 거절
+    R-->>U2: 0 (거절 → 대기열 등록)
+    deactivate R
+```
+
+| 테스트 | RED(원본) | GREEN(수정 후) |
 |---|---|---|
-| 정원 5명, 신규 사용자 20명 동시 발급 시도 | **`expected:<5> but was:<18>`** — 20명 중 18명이 발급됨(정원을 13명 초과) | 정확히 5명만 발급, `countActive <= 5` |
-| 같은 사용자가 동시에 10번 발급 요청(재시도·멀티 탭) | **`expected:<1L> but was:<10L>`** — 활성 인원이 10명으로 집계(사실은 1명) | 활성 인원 정확히 1명 |
+| 정원 5명, 신규 20명 동시 발급 | **`expected:<5> but was:<18>`** | 정확히 5명, `countActive ≤ 5` |
+| 같은 사용자 동시 10회 발급 요청 | **`expected:<1L> but was:<10L>`** | 활성 인원 정확히 1명 |
 
-**수정 내용**: `ActiveQueueRepository.tryIssueActive(scheduleId, uuid, capacity): Boolean`을 추가하고, Redis Lua 스크립트(`TRY_ISSUE_ACTIVE_SCRIPT`)로 "이미 유효한 활성 토큰이 있으면 유지, 없고 정원 미만이면 등록"을 **하나의 EVAL**로 묶었다. Redis는 EVAL을 한 번에 하나씩만 실행하므로, 여러 스레드가 동시에 호출해도 "확인 후 등록" 사이에 다른 호출이 끼어들 수 없다.
+**수정 내용**: `ActiveQueueRepository.tryIssueActive(scheduleId, uuid, capacity)`를 Redis Lua
+EVAL 한 번으로 "확인+등록"을 묶었다. 같은 uuid의 동시 중복 발급(#11)도 EVAL의 직렬 실행 특성으로
+부수적으로 함께 막힌다. `AdmissionPolicy`/`ThresholdAdmissionPolicy`는 더 이상 쓰이지 않아 삭제했다.
 
-- `IssueQueueTokenService`는 `AdmissionPolicy`/`countActive`+`saveActive` 대신 `tryIssueActive`를 쓰도록 변경했고, 더 이상 쓰이지 않게 된 `AdmissionPolicy`/`ThresholdAdmissionPolicy`는 삭제했다(`PromoteQueueTokenService`는 원래부터 이 정책을 쓰지 않았고 `capacity`를 직접 주입받는 자기만의 패턴이라 영향 없음).
-- Lua의 KEYS는 `RedisTemplate`의 keySerializer(`StringRedisSerializer`)로, ARGV/반환값은 valueSerializer(`GenericJackson2JsonRedisSerializer`)로 직렬화된다는 것을 이미 있던 `SeatHoldRedisRepository`의 Lua 스크립트 패턴을 그대로 따라 재확인했다(바이트코드로 `DefaultScriptExecutor`를 직접 확인). 반환값은 Long(0/1)만 쓰도록 설계해 JSON 직렬화 함정을 피했다.
-
-**부수적으로 같이 닫힌 위험**: 리스트업 표의 #7(같은 회원 동시 발급 시 토큰 중복)도 같은 수정으로 막힌다 — 같은 uuid로 동시에 호출된 두 `tryIssueActive`는 Redis 입장에서 **순서대로 실행되는 두 개의 원자적 트랜잭션**이라, 두 번째 호출 시점에는 첫 번째 호출이 이미 심어둔 uuid→token 매핑이 보이고 그대로 재사용된다. 별도 수정 없이 테스트로 증명했다(위 표의 두 번째 행).
+**트레이드오프**: Lua 스크립트는 Redis 서버에서 실행되는 "숨은 로직"이라 가독성·디버깅이 Kotlin
+코드보다 떨어진다. 그러나 EVAL의 원자성 없이는 같은 문제를 애플리케이션 레벨 락(대기열 전용
+분산락)으로 풀어야 했고, 그러면 모든 발급 요청이 스케줄 단위로 완전히 직렬화돼 처리량이 떨어진다 —
+Lua가 "원자성은 유지하면서 처리량은 유지"하는 더 적합한 선택이었다.
 
 ---
 
-## 5. 위험도 "중" — 현재 동작을 테스트로 고정 (수정하지 않음)
+### 4.4 대기열 승격 멀티 인스턴스 경합 — check-then-act를 Redis Lua로 원자화(이번 추가 보완)
 
-### 회원가입 loginId 중복
+이 항목은 처음 분류 때는 "중"(§3 #13)이라 §5(고치지 않고 현재 동작만 고정)로 갔었다. 이번 추가
+보완 세션에서 **사용자 결정으로 범위에 포함해 실제로 수정했다** — 그래서 "상" 3건과 같은 자리(§4)로
+옮긴다.
 
-**고정 테스트**: `src/test/java/kr/hhplus/be/server/concurrency/MemberLoginIdConcurrencyIntegrationTest.kt`
+**재현 테스트**: `QueueTokenLifecycleConcurrencyIntegrationTest.kt`(테스트 5개 중 앞의 2개가 "승격끼리" 정원 준수를, 이번 보완에서 추가한 다섯 번째가 "승격+신규 발급 혼합" 정원 준수를 지킨다)
 
-같은 loginId로 10개 트랜잭션이 동시에 가입을 시도하면:
-- **데이터 정합성은 안전**하다 — `member.login_id`의 `UNIQUE` 제약 덕분에 정확히 1건만 성공하고 DB에 중복 행이 생기지 않는다(실측 확인, 반복 2회).
-- 다만 패자 9건은 `LoginIdDuplicateException`(409)이 아니라 **번역된 `DataIntegrityViolationException`을 그대로** 받는다 — `MemberRepository`가 `JpaRepository`를 직접 상속하는 통합형 구조(`docs/report/step4-index-report.md`에서 "현상 유지"로 이미 결정된 구조)라 제약 위반을 도메인 예외로 변환하는 지점이 없기 때문이다. `GlobalExceptionHandler`의 범용 `Exception` 핸들러로 떨어져 HTTP 500이 된다.
+#### 문제 / 원인 (수정 전)
 
-**고치지 않은 이유**: 돈·재고에 영향이 없고(중복 회원이 생기지 않음), 에러 코드 품질(500 vs 409) 문제라 이번 선택 심화 ②의 "상" 기준(돈·재고·정원)에 해당하지 않는다. 고치려면 `MemberAuthService.signUp()` 또는 `MemberRepository` 구현체에서 `DataIntegrityViolationException → LoginIdDuplicateException` 변환을 추가하면 된다(결제 멱등성 수정과 동일한 패턴).
+```mermaid
+sequenceDiagram
+    participant I1 as 인스턴스1(승격 tick)
+    participant I2 as 인스턴스2(승격 tick)
+    participant R as Redis(활성 ZSET, 정원 5, 현재 0명)
 
-### 그 외 "중/하" 항목 (테스트 없이 리스트업만, §2 표 참고)
+    I1->>R: countActive → 0 (정원 5 중 5자리 남음으로 판단)
+    I2->>R: countActive → 0 (정원 5 중 5자리 남음으로 판단)
+    Note over I1,I2: 둘 다 "5명 더 승격 가능"으로 판단(check)
+    I1->>R: popWaiting(5) + saveActive ×5 (act)
+    I2->>R: popWaiting(5) + saveActive ×5 (act)
+    Note over R: 최종 활성 인원 10명(정원 5 초과)<br/>실측(인스턴스 10개, 정원 5, 대기자 50명): 활성 50명
+```
 
-- **대기열 승격 멀티 인스턴스 경합**(중): 단일 인스턴스에선 `@Scheduled`가 단일 스레드라 안전. 멀티 인스턴스 재현은 단일 JVM 테스트로는 사실적으로 만들기 어려워 테스트를 작성하지 않았다. 대안: `tryIssueActive`와 같은 Lua 원자화를 승격 경로에도 적용하거나, 스케줄러 자체에 분산락을 거는 방법.
-- **대기열 토큰 반납 vs 검증 경합**(하): 돈·재고 영향 없음, 최악의 경우 요청 1건의 일시적 거절. 테스트 작성하지 않음.
+#### 해결 (수정 후)
+
+```mermaid
+sequenceDiagram
+    participant I1 as 인스턴스1
+    participant I2 as 인스턴스2
+    participant R as Redis(단일 스레드로 EVAL 직렬 실행)
+
+    I1->>R: EVAL promote (ZCOUNT 확인 + ZPOPMIN + 활성 등록을 한 번에)
+    activate R
+    R->>R: ZCOUNT=0, remaining=5 → 대기열에서 5명 꺼내 활성 등록, 활성 5명
+    R-->>I1: 승격된 uuid 5개
+    deactivate R
+    I2->>R: EVAL promote
+    activate R
+    R->>R: ZCOUNT=5, remaining=0 → 꺼내지 않음
+    R-->>I2: 빈 목록
+    deactivate R
+```
+
+| 테스트 | RED(원본) | GREEN(수정 후) |
+|---|---|---|
+| 정원 5, 대기자 50명, "인스턴스" 10개가 동시에 승격 tick 실행 | **`expected:<5L> but was:<50L>`**(정원의 10배 승격) | 활성 인원 정확히 5명, 승격된 대기자 수 == 활성 인원 수, 승격+잔류 합 == 원래 대기자 수(50명, 유실·중복 없음) |
+| 승격된 대기자의 활성 토큰 조회·북키핑 정리(이번에 새로 추가한 검증) | — | `findActive` 정상 조회(TTL 범위 내), heartbeat key 삭제, 대기 비면 대기 스케줄 집합에서 scheduleId 제거, 활성 스케줄 집합에는 등록 |
+
+**수정 내용**: `ActiveQueueRepository.promote(scheduleId, capacity, admissionRatePerTick,
+candidateTokens)`를 추가해 "남은 활성 슬롯 계산(ZCOUNT) → 대기열에서 꺼내기(ZPOPMIN) → 활성
+등록(SADD+ZADD+SET+하트비트 삭제)"을 Redis Lua EVAL 하나로 묶었다. `PromoteQueueTokenService`는
+더 이상 `countActive`/`popWaiting`/`saveActive`를 직접 순서대로 호출하지 않고 이 한 번의 호출에
+위임한다. 더는 쓰이지 않게 된 `WaitingQueueRepository.popWaiting`은 ADR-3의 `AdmissionPolicy`
+삭제와 같은 원칙으로 삭제했다(`saveActive`는 `ReservationPaymentFlowIntegrationTest`가 테스트
+픽스처로 아직 써서 유지).
+
+**토큰 생성 방식(설계 근거)**: Lua 스크립트 안에서는 `UUID.randomUUID()` 같은 비결정적 생성을 할 수
+없다. 그래서 이번 tick에서 최대로 승격될 수 있는 인원(`admissionRatePerTick`)만큼 신규 활성 토큰
+후보를 `PromoteQueueTokenService`가 호출 **전에** 미리 만들어 `candidateTokens` 인자로 넘긴다. Lua는
+실제로 승격되는 인원 수만큼만 앞에서부터 꺼내 쓰고 나머지는 버린다 — 발급 정원(§4.3,
+`tryIssueActive`)에서 토큰 1개를 미리 만들어 ARGV로 넘기는 것과 같은 패턴이며, 여기서는 "몇 명이
+승격될지"가 스크립트 실행 전에는 알 수 없어 "최대로 가능한 수"만큼 미리 준비하는 쪽으로 확장했다.
+
+**반환값/직렬화 설계 — Redis Lua 내장 `cjson`으로 JSON 디코딩(코드 리뷰 MEDIUM 반영)**:
+`RedisTemplate<String, Any>`는 KEYS는 `StringRedisSerializer`, VALUE/ARGV/반환값은
+`GenericJackson2JsonRedisSerializer`를 쓴다. 문자열 값은 이 직렬화기를 거치면 Lua 안에서 앞뒤에
+쌍따옴표가 그대로 붙은 JSON 문자열 리터럴 바이트로 보인다(평문 `abc-123`이 아니라 문자 그대로
+`"abc-123"`). 기존 스크립트(`tryIssueActive`)는 이런 문자열을 "새 키 이름"을 만드는 데 쓴 적이
+없이 그대로 복사만 했기 때문에 문제가 없었다. 반면 이번 `promote` 스크립트는 `ZPOPMIN`으로 꺼낸
+대기자 uuid를 그대로 복사하는 게 아니라 `queue:schedule:{id}:active:uuid:{uuid}`라는 **새 키
+이름을 직접 조립**해야 해서, 쌍따옴표가 붙은 채로 조립하면 `findActive()`가 평문 uuid로 만드는
+키와 전혀 다른 키가 돼버린다. 처음에는 `string.sub(rawUuid, 2, -2)`로 앞뒤 쌍따옴표만 잘라내
+평문 uuid를 복원했는데, 이는 uuid가 `UUID.randomUUID().toString()` 형식(영숫자+하이픈뿐)이라
+JSON 이스케이프가 필요한 문자가 절대 나오지 않는다는 전제에 의존하는 트릭이었다 — 코드 리뷰에서
+"이 전제가 깨지면 조용히 틀린 키를 만든다"는 지적(MEDIUM)을 받아, Redis Lua에 내장된
+`cjson.decode(rawUuid)`로 교체했다. `cjson`은 표준 JSON 파서라 `rawUuid`에 이스케이프가 섞여
+있든 없든 **항상 올바른 평문 문자열로 디코딩**한다 — "이스케이프가 필요 없다"는 전제 자체가
+더 이상 필요 없어졌다. scheduleId는 반대 방향 트릭을 그대로 유지했다 — 숫자로 넘겨 키 이름
+조립에는 그대로 쓰고, 스케줄 집합(SADD/SREM) 멤버로 넣을 때만 쌍따옴표로 다시 감싸 Kotlin이
+`scheduleId.toString()`을 저장할 때와 같은 바이트가 되도록 맞췄다(scheduleId는 Long이라 JSON
+이스케이프 문제 자체가 없어 `cjson`으로 바꿀 이유가 없다). 이 설계는
+`QueueTokenLifecycleConcurrencyIntegrationTest`의 두 번째 테스트(`findActive` 조회, heartbeat·
+북키핑 정리까지 확인)로 end-to-end 검증했다 — 단위 테스트(MockK)로는 실제 Redis가 없어 이
+로직의 정합성을 검증할 수 없어, `tryIssueActive`와 같은 선례대로 Lua 내용 자체는 실제 Redis를
+쓰는 통합 테스트로만 검증한다(`ActiveQueueRedisRepositoryTest`는 `saveActive`/`removeActive`/
+`removeExpiredActive`처럼 Redis ops 메서드를 직접 호출하는 메서드만 MockK로 단위 테스트한다).
+
+**트레이드오프**: §4.3과 같다 — Lua는 가독성·디버깅 비용이 있지만, 애플리케이션 레벨 분산락보다
+처리량을 유지한다. 추가로, 이번 설계는 "스케줄 키 포맷이 두 저장소(`ActiveQueueRedisRepository`,
+`WaitingQueueRedisRepository`)에서 drift 나면 Lua가 조용히 엉뚱한 키를 건드린다"는 위험을 새로
+만들었다 — 두 저장소가 키 포맷 문자열을 공유하도록 `QueueRedisKeys` 객체로 모아 완화했다. 대안으로
+기각한 것은 승격 로직 전체에 스케줄 단위 분산락을 거는 방법이다(§5 원래 대안) — 그러면 모든 승격
+tick이 스케줄 단위로 완전히 직렬화돼 Lua보다 구현은 단순하지만 처리량이 떨어지고, 발급 정원(§4.3)과
+다른 방식(락 vs Lua)을 섞어 쓰게 돼 일관성이 떨어진다고 판단했다(ADR-7).
+
+#### 결과(RED → GREEN)
+
+| 단계 | 실측 결과 |
+|---|---|
+| RED(원본, 정원 5·대기자 50명·인스턴스 10개) | `expected:<5L> but was:<50L>` — 활성 인원 50명(정원의 10배), 승격된 대기자 50명, 아직 대기 중 0명 |
+| GREEN(수정 후, 동일 조건) | 활성 인원 정확히 5명, 승격된 대기자 5명 == 활성 인원 5명, 승격(5)+잔류(45) 합 50명(유실·중복 없음) |
+
+#### 추가 검증 — 승격과 신규 발급을 같은 스케줄에 뒤섞어 동시 실행(이번 보완)
+
+지금까지의 테스트는 "승격끼리"만 동시에 돌렸다. 그러나 운영에서는 스케줄러의 승격 tick(`promote`
+EVAL)과 사용자의 신규 발급 요청(`tryIssueActive` EVAL)이 같은 스케줄의 같은 활성 ZSET을 같은
+순간에 건드릴 수 있다 — 서로 다른 두 EVAL이 뒤섞여도 정원이 지켜지는지는 "승격끼리"만 돌린
+테스트로는 증명되지 않는다. `QueueTokenLifecycleConcurrencyIntegrationTest`에 다섯 번째 테스트를
+추가해, 정원 5에 승격 tick 8개(인스턴스 8개, 각 tick이 한 번에 최대 정원만큼 꺼내도록
+`admissionRatePerTick=5`)와 신규 발급 8건(각각 처음 보는 uuid)을 **같은 출발선(CountDownLatch)에서
+동시에** 실행했다(총 16스레드).
+
+| 항목 | 실측 결과 |
+|---|---|
+| 활성 인원(정원 5) | **정확히 5명**(4회 반복 실행 모두 동일) — 두 종류의 EVAL이 뒤섞여도 정원을 넘지 않음 |
+| 승격으로 채워진 인원 / 신규 발급으로 채워진 인원 | **5 / 0**(4회 반복 실행 모두 동일) |
+
+4회 모두 승격 tick 쪽이 정원을 전부 채웠다 — 완전히 우연은 아니다. `IssueQueueTokenService.issue()`는
+자신의 EVAL(`tryIssueActive`)을 호출하기 전에 `findActive`(GET)·`isWaiting`(ZSCORE) 두 번의 Redis
+왕복을 먼저 거치는 반면, `PromoteQueueTokenService.execute()`는 `findScheduleIds()`(SMEMBERS) 한
+번만 거치고 바로 EVAL(`promote`)을 호출한다 — 사전 체크 단계가 더 적어 상대적으로 먼저 EVAL에
+도달하는 경향이 있고, 승격 tick의 `admissionRatePerTick=5`가 정원 전체라 한 번 이기면 그 EVAL이
+남은 슬롯을 전부 가져간다. 이 설명은 이번 로컬 환경에서 4회 반복한 결과에 대한 것이고, 실제
+운영의 네트워크 지연·스레드 스케줄링에서는 분배가 달라질 수 있다 — 다만 **"두 EVAL이 뒤섞여도
+활성 인원이 정원을 넘지 않는다"는 Rule 자체는 타이밍과 무관하게 항상 보장된다**(각 EVAL이 Redis
+단일 스레드에서 직렬 실행되기 때문).
+
+이로써 ADR-7의 원자성 보장이 "승격끼리"뿐 아니라 "승격과 신규 발급이 섞여도" 유지됨을 실측으로
+확인했다(코드 리뷰 MEDIUM 반영).
+
+---
+
+## 5. 위험도 "중·하" — 현재 동작을 고정한 Rule과 대안
+
+이번 선택 심화 ②의 "상" 기준(돈·재고·정원 직접 영향)에 해당하지 않아 **고치지 않았다**(대기열 승격
+멀티 인스턴스 경합은 처음에 이 기준으로 분류됐지만, 이번 추가 보완에서 사용자 결정으로 범위에
+포함해 실제로 수정했다 — §4.4로 옮겼다). 나머지는 모두 테스트로 현재 동작을 고정했고, 테스트
+이름·주석에 "현재 동작 고정"을 명시했다.
+
+### 회원가입 loginId 중복 (중)
+
+같은 loginId로 10개 트랜잭션이 동시에 가입을 시도하면 **데이터 정합성은 안전**하다 — UNIQUE 제약
+덕분에 정확히 1건만 성공하고 중복 행이 생기지 않는다(실측 확인, 반복 2회). 다만 패자 9건은
+`LoginIdDuplicateException`(409)이 아니라 번역된 `DataIntegrityViolationException`을 그대로
+받아 HTTP 500이 된다. **대안**: `MemberAuthService.signUp()` 또는 저장소 구현체에서
+`DataIntegrityViolationException → LoginIdDuplicateException` 변환 추가(결제 멱등성과 동일한
+패턴). → `MemberLoginIdConcurrencyIntegrationTest`
+
+### 대기열 토큰 반납 vs 검증 (하, 이번 보완)
+
+결제 완료로 토큰이 반납되는 순간(`removeActive`) 다른 탭의 좌석 조회가 토큰을 검증
+(`ValidateQueueTokenService`)하면, 어느 쪽이 먼저 끝나느냐에 따라 검증이 성공하거나
+`QueueTokenInvalidException`을 던진다 — 50회 반복 실측 결과 **성공 16회, 거절 34회**로 둘 다
+실제로 일어났고, 그 외의 예외(NPE 등 데이터가 깨지는 경우)는 한 번도 없었다. 돈·재고 영향 없음,
+최악의 경우 그 순간의 조회 1건이 거절되고 재발급하면 해결된다. **대안**: 거절 시 클라이언트가
+자동으로 재발급을 요청하는 UX(이미 일반적인 폴링 흐름에서 자연스럽게 해결될 가능성이 높음) — 별도
+서버 수정은 필요하지 않다고 판단. → `QueueTokenLifecycleConcurrencyIntegrationTest`(세 번째 테스트 —
+이번 추가 보완에서 승격 관련 테스트가 2개로 늘어 순서가 한 칸씩 밀렸다)
+
+### 대기열 만료 정리 vs 신규 발급 북키핑 경합 (하, 이번 보완 — 새로 발견)
+
+`removeExpiredActive`는 "ZREMRANGEBYSCORE 실행 → 활성 ZSET이 비었으면 스케줄 집합에서
+scheduleId 제거"라는 비원자적 2단계다. 이론적으로는, 두 번째 단계(size 확인 → SREM) 사이에 다른
+사용자가 같은 스케줄에 새로 발급받아 scheduleId를 다시 SADD하면, 뒤늦게 실행되는 SREM이 그
+scheduleId를 다시 지워버릴 수 있다 — 그러면 스케줄러가 `findScheduleIds()`로 이 스케줄을 더는
+찾지 못해 다음 신규 발급 전까지 만료·승격 처리가 누락된다. **실측: 100회 반복 중 재현 0회**(§9
+한계 — 재현 안 됐다고 "안전하다"는 뜻은 아니다, 타이밍 창이 매우 좁다). 돈·재고 영향 없음(활성
+ZSET의 데이터 자체는 안 깨짐, 북키핑 집합만 어긋남). **대안**: 좌석 홀드의 `REMOVE_EXPIRED_SCRIPT`와
+같은 방식으로 "정리 + 북키핑 갱신"을 Lua EVAL 하나로 묶기. → `QueueTokenLifecycleConcurrencyIntegrationTest`(네 번째 테스트, 재현 시도)
+
+### 리프레시 토큰 동시 회전 (중, 이번 보완 — **새로 발견, 사용자 결정: 기록만 하고 나중에 처리**)
+
+`MemberAuthService.refresh()`는 `find(uuid)`로 저장된 리프레시 토큰을 읽고 비교한 뒤 새 토큰으로
+`save(uuid, newToken)`(덮어쓰기, 회원당 Redis key 1개, 락 없음)한다. **같은 refreshToken으로
+동시에 두 번 요청하면(네트워크 재시도, 중복 탭 등) 실측 결과 둘 다 예외 없이 성공했고, 그중 하나의
+새 토큰은 Redis에 저장되지 않는 유령 토큰이 됐다** — 그 토큰으로 다음 갱신을 시도하면
+`InvalidTokenException`을 받는다(재현 확인, `firstOrNull` 로 분기 처리해 두 토큰이 같은 밀리초에
+발급되는 극히 드문 경우도 대응). 돈·재고 영향은 없지만, 사용자가 갑자기 로그아웃된 것처럼 보이는
+세션 영향이 있다. 로그인(`signIn`)도 같은 저장 메커니즘(회원당 key 1개)을 쓰므로, 여러 기기에서
+동시 로그인하면 "마지막 로그인만 유효"가 되는 동일한 현상이 있다 — 다만 이건 멀티 디바이스 정책이
+의도적으로 그렇게 설계된 것일 수도 있어 별도 테스트는 추가하지 않았다(§3 #17, 리스트업만).
+
+**대안**: (a) 새 리프레시 토큰을 발급할 때 이전 토큰을 즉시 폐기하지 않고 짧은 grace period 동안
+유효하게 두는 방식, (b) uuid당 Redis 분산락으로 `find`→`save`를 직렬화. → **사용자 결정: 지금은
+고치지 않고 기록만 해두며, 처리는 나중으로 미룬다**(ADR-6) — `RefreshTokenRotationConcurrencyIntegrationTest`
 
 ---
 
 ## 6. Rule 목록 — "이 기능은 이 테스트가 지킨다"
 
-| Rule | 지키는 테스트 |
-|---|---|
-| 포인트 잔액 변경은 항상 DB 조건부 UPDATE/UPSERT(`chargePoint`/`usePoint`)로만 이뤄지고, 동시 충전·동시 결제가 서로의 변경을 덮어쓰지 않는다 | `PointConcurrencyIntegrationTest` (2개) |
-| 결제는 예약 하나당 정확히 하나만 존재한다 — 분산락이 뚫리더라도 DB UNIQUE 제약이 막는다 | `PaymentIdempotencyConcurrencyIntegrationTest` (3개) |
-| 대기열 활성 인원은 동시 발급 요청이 몰려도 정원을 넘지 않는다. 같은 사용자의 중복 요청은 활성 인원에 1명으로만 집계된다 | `QueueCapacityConcurrencyIntegrationTest` (2개) |
-| 같은 loginId로 동시 가입해도 회원 행은 정확히 1개만 생성된다(에러 코드는 미정 — 고정만 함) | `MemberLoginIdConcurrencyIntegrationTest` (1개) |
-| (기존) 같은 좌석에 동시 예약 요청이 몰려도 한 명만 성공한다 | `ConcurrentSeatReservationIntegrationTest` (필수 ③, 변경 없음) |
-| 포인트 `chargePoint`/`usePoint`는 단일 스레드에서도 각자 명시된 대로 동작한다(신규 생성/기존 증가/정상 차감/잔액 부족 시 0건·불변) — 코드 리뷰 반영(LOW) | `PointRepositoryIntegrationTest` (4개) |
+> §3 리스트업 표 17개 행 중 16개 행이 아래 Rule에 연결된다. #17(로그인 signIn 시 리프레시 토큰
+> 덮어쓰기)만 연결되지 않는다 — 별도 서버 수정이 필요한지 자체가 멀티 디바이스 정책 미정이라
+> 테스트를 추가하지 않았다. 다만 #16과 **저장 메커니즘 자체는 같아서**, #16의 Rule이 그 메커니즘을
+> 고정하는 한도 내에서는 #17의 동작도 간접적으로 같이 드러난다(§5에서 근거를 명시) — 그래도 #17
+> 자체를 "지킨다"고 말할 수 있는 전용 테스트는 없다는 점은 정확히 구분한다.
+
+| Rule | 지키는 테스트 | 연결되는 리스트업 # |
+|---|---|---|
+| 같은 좌석에 동시 예약 요청이 몰려도 한 명만 성공한다 | `ConcurrentSeatReservationIntegrationTest` | #1 |
+| 분산락이 없어도 DB 조건부 UPDATE가 좌석 중복 홀드를 막는다 | `SeatRepositoryIntegrationTest` | #2 |
+| 결제 확정은 만료 스케줄러와 경합해도 HOLD+reservation_id가 일치하는 좌석만 바꾼다 | `SeatRepositoryIntegrationTest` | #3 |
+| 좌석 홀드 만료 정리는 ABA 없이, 아직 만료 상태인 항목만 지운다 | `SeatHoldRedisRepositoryIntegrationTest` | #4 |
+| 결제 완료 후 만료 처리가 뒤늦게 끼어들어도 이미 결제된 좌석을 되돌리지 않는다 | `PaymentFailureRollbackIntegrationTest` | #5 |
+| 포인트 잔액 변경은 항상 DB 조건부 UPDATE/UPSERT로만 이뤄지고, 동시 충전·동시 결제가 서로의 변경을 덮어쓰지 않는다 | `PointConcurrencyIntegrationTest`(3개) | #6, #7, #8 |
+| 결제는 예약 하나당 정확히 하나만 존재한다 — 분산락이 뚫리더라도 DB UNIQUE 제약이 막는다 | `PaymentIdempotencyConcurrencyIntegrationTest`(3개) | #9 |
+| 대기열 활성 인원은 동시 발급 요청이 몰려도 정원을 넘지 않고, 같은 사용자의 중복 요청은 1명으로만 집계된다 | `QueueCapacityConcurrencyIntegrationTest`(2개) | #10, #11 |
+| 같은 loginId로 동시 가입해도 회원 행은 정확히 1개만 생성된다(에러 코드는 미정 — 고정만 함) | `MemberLoginIdConcurrencyIntegrationTest` | #12 |
+| 멀티 인스턴스가 동시에 승격 tick을 실행해도 활성 인원은 정원을 넘지 않고, 승격된 대기자 수는 활성 인원 수와 정확히 일치한다(`ActiveQueueRepository.promote` Lua EVAL, ADR-7) | `QueueTokenLifecycleConcurrencyIntegrationTest`(1번째) | #13 |
+| 승격된 대기자는 활성 토큰을 조회할 수 있고, heartbeat·대기열 북키핑이 정리되며 활성 스케줄 집합에는 등록된다 | `QueueTokenLifecycleConcurrencyIntegrationTest`(2번째) | #13 보강 |
+| 토큰 반납과 검증이 동시에 일어나도 예외 없이 끝나거나 `QueueTokenInvalidException`만 던진다 | `QueueTokenLifecycleConcurrencyIntegrationTest`(3번째) | #14 |
+| 만료 정리와 신규 발급이 반복적으로 경합해도 활성 인원 카운트 등 데이터 자체는 깨지지 않는다(북키핑 어긋남 재현 시도) | `QueueTokenLifecycleConcurrencyIntegrationTest`(4번째) | #15 |
+| 같은 refreshToken으로 동시에 회전해도 둘 다 성공하지만, 최종적으로 유효한 토큰은 하나뿐이라는 **현재(위험한) 동작**을 고정한다(사용자 결정: 기록만, 나중에 처리) | `RefreshTokenRotationConcurrencyIntegrationTest` | #16 |
+| (기존) 포인트 `chargePoint`/`usePoint`는 단일 스레드에서도 명시된 대로 동작한다 | `PointRepositoryIntegrationTest`(4개) | #6, #7 보강 |
+
+> #17(로그인 signIn 시 리프레시 토큰 덮어쓰기)에 전용으로 연결된 Rule/테스트는 없다 — §3·§5 참고.
 
 ---
 
-## 7. `./gradlew test` 결과
+## 7. 의사결정 기록 (ADR)
 
-- **전체 124개 테스트, 0 failures, 0 errors** (`./gradlew clean test`, 약 50초).
-  - 기존 112개(필수 ①②③ + 선택 심화 ① 포함) + 동시성 테스트 8개(포인트 2 + 결제 멱등성 3 + 대기열 정원 2 + loginId 1) + 코드 리뷰 반영으로 추가한 포인트 저장소 통합 테스트 4개(`PointRepositoryIntegrationTest` — chargePoint 신규/기존, usePoint 정상/잔액부족).
-- 새 동시성 테스트 4개 클래스(8개 테스트)만의 소요 시간: **약 1.5초**(0.21s + 0.57s + 0.42s + 0.26s, 클래스별 Testcontainers 재사용으로 매우 빠름).
-- 기존 `ConcurrentSeatReservationIntegrationTest`(필수 ③)는 약 10.3초로 변동 없음(private 헬퍼를 공용 `runConcurrently`로 추출했을 뿐 로직은 바꾸지 않음).
-- `perfTest`에는 코드 리뷰 MEDIUM 항목 재현 시도용 `PointUpsertDeadlockReproductionTest`(`@Tag("perf")`)가 추가됐다 — 스레드 수가 크고(30~50) 타이밍에 의존적이라 기본 `./gradlew test`에는 포함하지 않았다(§11 한계에 결과 기록). `./gradlew perfTest --tests "...PointUpsertDeadlockReproductionTest"`로 약 20~30초 안에 실행된다.
+### ADR-1. 포인트 동시성 방어를 분산락이 아닌 DB 조건부 UPDATE/UPSERT로 구현
 
----
+- **상태**: Accepted (이전 세션)
+- **맥락**: 포인트 충전/차감에 lost update가 실측으로 확인됐다(§4.1). 분산락(회원 단위)과 DB
+  레벨 원자 연산 둘 다 해결 가능했다.
+- **결정**: DB UPSERT(`INSERT ... ON DUPLICATE KEY UPDATE`)/조건부 UPDATE를 선택했다.
+- **결과**:
+  - 장점: 락 키가 하나 늘지 않아 데드락 순서 관리가 단순하다. "DB가 최후 방어선"이라는 Step4
+    원칙과 일관된다. 트랜잭션당 Redis 호출이 늘지 않는다.
+  - 단점: InnoDB 갭락으로 인한 데드락 가능성이 코드 리뷰에서 제기됐다(§9 재현 시도 — 재현 안 됨).
+    재시도 로직이 없어, 실제로 데드락이 나면 그 요청은 그대로 실패한다.
 
-## 8. 변경 파일 목록
+### ADR-2. 결제 UNIQUE 제약의 예외 변환 범위를 제약 이름으로 좁힘
 
-### 프로덕션 코드
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/domain/repository/PointRepository.kt` — `chargePoint`/`usePoint` 추가
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/infrastructure/persistence/SpringPointJpa.kt` — UPSERT 네이티브 쿼리, 조건부 UPDATE
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/infrastructure/persistence/PointJpaRepository.kt` — 위 메서드 위임
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/infrastructure/persistence/PointEntity.kt` — `memberId` UNIQUE, 중복 인덱스 제거
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/application/usecase/ChargePointService.kt` — 원자적 충전으로 전환
-- `src/main/kotlin/kr/hhplus/be/server/domains/payment/application/usecase/ProcessPaymentService.kt` — `processPointUsage`를 원자적 차감으로 전환
-- `src/main/kotlin/kr/hhplus/be/server/domains/payment/infrastructure/persistence/PaymentEntity.kt` — `reservation_id` UNIQUE, 중복 인덱스 제거
-- `src/main/kotlin/kr/hhplus/be/server/domains/payment/infrastructure/persistence/PaymentJpaRepository.kt` — 제약 위반 → `DuplicatePaymentException` 변환
-- `src/main/kotlin/kr/hhplus/be/server/domains/queue/domain/repository/ActiveQueueRepository.kt` — `tryIssueActive` 추가
-- `src/main/kotlin/kr/hhplus/be/server/domains/queue/infrastructure/redis/ActiveQueueRedisRepository.kt` — Lua `TRY_ISSUE_ACTIVE_SCRIPT` 구현
-- `src/main/kotlin/kr/hhplus/be/server/domains/queue/application/usecase/IssueQueueTokenService.kt` — `tryIssueActive` 사용으로 전환
-- `src/main/kotlin/kr/hhplus/be/server/domains/queue/infrastructure/config/QueueUseCaseConfig.kt` — 정책 빈 제거, capacity 직접 주입
-- `src/main/kotlin/kr/hhplus/be/server/domains/queue/domain/policy/AdmissionPolicy.kt`, `ThresholdAdmissionPolicy.kt` — **삭제** (더 이상 쓰이지 않는 코드)
+- **상태**: Accepted (이전 세션, 코드 리뷰 반영)
+- **맥락**: `@JoinColumn(unique=true)`만 쓰면 Hibernate가 제약 이름을 임의 해시값으로 생성해,
+  "이 예외가 정말 `reservation_id` 중복 때문인지" 코드에서 식별할 수 없고 모든
+  `DataIntegrityViolationException`을 `DuplicatePaymentException`으로 뭉뚱그리게 된다.
+- **결정**: `@Table(uniqueConstraints=[uk_payment_reservation_id])`로 제약 이름을 고정하고,
+  `constraintName`에 그 이름이 포함될 때만 변환한다.
+- **결과**: 장점 — FK·NOT NULL 위반 등 다른 원인을 숨기지 않는다. 단점 — MySQL 버전/설정에 따라
+  `constraintName` 포맷(`테이블명.제약이름`)이 달라질 수 있어 `contains` 매칭을 썼다(정확히 일치
+  비교보다 느슨함).
 
-### 테스트 코드
-- `src/test/java/kr/hhplus/be/server/concurrency/PointConcurrencyIntegrationTest.kt` (신규)
-- `src/test/java/kr/hhplus/be/server/concurrency/PaymentIdempotencyConcurrencyIntegrationTest.kt` (신규)
-- `src/test/java/kr/hhplus/be/server/concurrency/QueueCapacityConcurrencyIntegrationTest.kt` (신규)
-- `src/test/java/kr/hhplus/be/server/concurrency/MemberLoginIdConcurrencyIntegrationTest.kt` (신규)
-- `src/test/java/kr/hhplus/be/server/support/ConcurrencyTestSupport.kt` (신규) — `runConcurrently`/`runConcurrentlyCollecting` 공용 헬퍼
-- `src/test/java/kr/hhplus/be/server/integration/ConcurrentSeatReservationIntegrationTest.kt` — private 헬퍼를 공용 헬퍼 사용으로 교체(로직 변경 없음)
-- `src/test/java/kr/hhplus/be/server/IntegrationTestConfiguration.kt`, `support/fixture/ConcertReservationFixture.kt` — 포인트 충전 픽스처(`chargePoint`) 추가
-- `src/test/java/kr/hhplus/be/server/domains/point/application/usecase/ChargePointServiceTest.kt`, `domains/payment/application/usecase/ProcessPaymentServiceTest.kt`, `domains/queue/application/usecase/IssueQueueTokenServiceTest.kt` — 변경된 프로덕션 코드에 맞춰 단위 테스트 갱신
+### ADR-3. 대기열 정원을 Redis Lua EVAL로 원자화, 미사용 정책 클래스 삭제
 
-### 코드 리뷰 반영 (2026-10-21, `docs/agent/reviews/2026-10-21-concurrency-review.md`)
-- `src/main/kotlin/kr/hhplus/be/server/domains/payment/infrastructure/persistence/PaymentEntity.kt` — `@JoinColumn(unique=true)` 대신 이름 있는 `@Table(uniqueConstraints=[uk_payment_reservation_id])`로 변경(MEDIUM)
-- `src/main/kotlin/kr/hhplus/be/server/domains/payment/infrastructure/persistence/PaymentJpaRepository.kt` — `DataIntegrityViolationException` → `DuplicatePaymentException` 변환을 `uk_payment_reservation_id` 제약 위반일 때만으로 좁힘(MEDIUM)
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/infrastructure/persistence/SpringPointJpa.kt` — `usePoint`가 `updated_at`도 함께 갱신하도록 수정(LOW). 처음엔 JPQL `CURRENT_TIMESTAMP`로 했다가 `now(6)`(마이크로초)와 정밀도가 달라(초 단위로 잘림) 문제가 될 수 있음을 테스트로 발견하고, `chargePoint`와 동일한 네이티브 `now(6)` 쿼리로 변경
-- `src/main/kotlin/kr/hhplus/be/server/domains/point/domain/repository/PointRepository.kt` — `chargePoint`/`usePoint` KDoc에 MySQL의 영향받은 행 수(1/2) 동작 기록
-- `src/test/java/kr/hhplus/be/server/domains/point/infrastructure/persistence/PointRepositoryIntegrationTest.kt` (신규) — `chargePoint`(신규 행/기존 행 증가), `usePoint`(정상 차감/잔액 부족) 단일 스레드 검증 4건(LOW)
-- `src/test/java/kr/hhplus/be/server/concurrency/PointUpsertDeadlockReproductionTest.kt` (신규, `@Tag("perf")`) — UPSERT 데드락 재현 시도(결과: 재현 안 됨, §11 한계)(MEDIUM)
+- **상태**: Accepted (이전 세션)
+- **맥락**: `countActive`→`saveActive` check-then-act가 정원 초과를 실제로 재현했다(§4.3).
+- **결정**: Lua EVAL로 "확인+등록"을 묶고, 더 이상 쓰이지 않게 된 `AdmissionPolicy`/
+  `ThresholdAdmissionPolicy`를 삭제했다.
+- **결과**: 장점 — 애플리케이션 레벨 분산락 없이도 원자성 확보, 처리량 유지. 단점 — Lua는
+  Redis 서버에서 실행되는 로직이라 Kotlin 코드만 보고는 동작을 알 수 없다(가독성·디버깅 비용).
 
-### 커넥션 풀 크기 결정 반영 (2026-10-21, §10-1)
-- `src/main/resources/application.yml` — `spring.datasource.hikari.maximum-pool-size: 3 → 15`
-- `src/test/java/kr/hhplus/be/server/concurrency/PaymentIdempotencyConcurrencyIntegrationTest.kt` — `ATTEMPT_COUNT: 2 → 10`(원래 의도한 동시 결제 수준으로 복원), 관련 주석 갱신
+### ADR-4. HikariCP 최대 커넥션 풀 3 → 15
 
-### 문서
-- `docs/report/step4-concurrency-report.md` (이 문서)
+- **상태**: Accepted (2026-10-21, 별도 세션)
+- **맥락**: 분산락을 경유한 결제 플로우는 요청 1건당 최대 커넥션 2개(바깥 `@Transactional` +
+  `REQUIRES_NEW`)가 필요하다 — 동시 N건이면 **N+1**개가 필요한데 풀이 3개뿐이었다. 실측으로
+  풀 크기 3과 10(=N) 모두 `Failed to acquire lock`으로 실패, 11(=N+1)부터 통과를 확인했다.
 
----
+```mermaid
+sequenceDiagram
+    participant T1 as 스레드1(결제)
+    participant T2 as 스레드2(결제)
+    participant Pool as HikariCP(maximum-pool-size=3)
+    participant Lock as Redis 분산락(reservation:1:payment)
 
-## 9. 면접 포인트 3개
+    T1->>Pool: 커넥션 획득(바깥 @Transactional, resolveMemberId 첫 쿼리)
+    T2->>Pool: 커넥션 획득(바깥 @Transactional, resolveMemberId 첫 쿼리)
+    Note over Pool: 풀 3개 중 2개 사용 중(T1, T2) — 1개만 남음
+    T1->>Lock: tryLock(reservation:1:payment)
+    Lock-->>T1: 획득 성공
+    T2->>Lock: tryLock(reservation:1:payment)
+    Note over T2,Lock: 대기(최대 5초, waitTime)
+    T1->>Pool: REQUIRES_NEW 커넥션 추가 요청(비즈니스 로직 실행)
+    Note over Pool: 남은 1개를 T1이 추가로 가져가 풀 3개 전부 사용 중<br/>(T1이 2개, T2가 1개를 쥔 채 대기)
+    Note over T1,T2: 동시 요청 수(N) ≥ 풀 크기면 "락 대기"와 "커넥션 대기"가<br/>같은 타이밍에 겹쳐 전체가 타임아웃(실측: 풀=3·10 모두 실패, 11부터 통과)
+```
 
-1. **"원자적 조건부 UPDATE만으로는 부족할 수 있다"**: 포인트 최초 충전 경합을 고치면서, "조건부 UPDATE 실패 → insert로 새 행 생성 → insert가 UNIQUE 위반이면 같은 트랜잭션에서 조건부 UPDATE로 재시도"라는 1차 수정이 실제로 `expected:<15000> but was:<13000>`이라는 lost update를 만든 것을 실측으로 발견했다. 원인은 Hibernate가 제약 위반(flush 실패) 이후 같은 세션/트랜잭션을 더 이상 안전하게 쓸 수 없는 상태로 만든다는 것 — 애플리케이션이 예외를 catch해도 DB 트랜잭션 레벨에서는 이미 문제가 생긴 뒤였다. 최종적으로는 재시도 자체를 없애고 `INSERT ... ON DUPLICATE KEY UPDATE` 네이티브 UPSERT 한 문장으로 해결했다. **"고쳤다고 생각한 코드를 실제로 동시성 테스트로 다시 돌려봐야 하는 이유"**를 보여주는 사례다.
-2. **"분산락이 있어도 DB 제약이 필요한 이유"**: 결제 멱등성에서, 분산락(커밋 후 해제)이 **이미 완전히 직렬화**하고 있어 정상 시나리오에서는 중복이 재현되지 않는다는 것을 실측으로 확인했다. 그럼에도 `leaseTime`이 3초 고정값이라는 구조적 한계 때문에 DB UNIQUE 제약을 추가로 걸었고, **락을 거치지 않고 저장소를 직접 두드린 테스트**로 "락이 없으면 원본 코드가 중복 결제 10건을 전부 허용한다"는 걸 증명했다. 애플리케이션 락은 네트워크 지연·GC pause 등 가정이 깨질 수 있어, DB 제약이 진짜 "마지막 방어선"이라는 Step4 원칙을 결제 도메인에도 일관되게 적용한 사례.
-3. **Redis Lua EVAL의 원자성으로 check-then-act를 닫는 패턴과 그 부수 효과**: 대기열 정원 체크(`countActive`)와 등록(`saveActive`)을 한 EVAL로 묶으면, Redis가 명령을 하나씩만 순서대로 실행한다는 성질 덕분에 "정원 초과 발급"뿐 아니라 "같은 사용자 동시 중복 발급"까지 **같은 수정으로 부수적으로 막힌다**는 걸 테스트로 증명했다(두 테스트가 서로 다른 위험을 검증하지만 수정은 하나). 또한 Spring Data Redis가 Lua의 KEYS는 keySerializer로, ARGV/반환값은 valueSerializer로 **다르게 직렬화**한다는 점(바이트코드로 직접 확인)을 이해하고 반영했다 — 반환값을 String으로 설계했다면 JSON 직렬화 경계에서 또 다른 함정에 빠질 뻔했다.
+- **결정**: 15(최소 필요치 11 + 여유 4).
+- **결과**: 장점 — 동시 결제 10건 기준 안정적으로 통과(RED→GREEN 실측). 단점 — 인스턴스당 풀이
+  커지면 `max_connections`와의 여유를 다시 계산해야 한다(§8 인프라 근거는 그대로 유지).
+  근본적 해결(바깥 트랜잭션이 락 대기 동안 커넥션을 쥐지 않도록 구조 변경)은 범위 밖으로 남겼다.
 
----
+### ADR-5. 대기열 승격 멀티 인스턴스 경합 — 고치지 않고 현재 동작을 Rule로 고정
 
-## 10. 판단을 미룬 것 / 사용자 결정이 필요한 것
+- **상태**: **Superseded(대체됨) → ADR-7**. 이번 추가 보완 세션에서 사용자가 "이번 선택 심화 ②의
+  범위(돈·재고·정원 영향)에 포함"하기로 결정해, 실제로 수정했다(§4.4). 아래 맥락·결정은 그 전까지의
+  기록으로 남겨두고, 실제 결정·구현은 ADR-7을 본다.
+- **맥락(당시)**: 실측으로 정원의 10배 초과 승격을 확인했다(§3 #13). 현재 배포는 단일 인스턴스라
+  당장의 운영 위험은 낮다고 판단해, 처음에는 "중" 등급으로 분류하고 고치지 않기로 했었다.
+- **결정(당시, 지금은 대체됨)**: 수정하지 않고 테스트로 현재 동작을 고정한다.
+- **결과(당시)**: 장점 — 범위를 "돈·재고·정원 직접 영향이 실측된 것"으로 좁게 유지해 이번 선택
+  심화의 핵심(상 3건)에 집중할 수 있었다. 단점 — 멀티 인스턴스로 스케일하는 시점에 이 위험이 그대로
+  남는다는 것이었는데, 사용자가 "지금 고친다"로 결정해 이 단점이 그대로 ADR-7의 동기가 됐다.
 
-1. **(결정 완료, 2026-10-21) HikariCP 커넥션 풀 크기: 3 → 15**
+### ADR-6. 리프레시 토큰 동시 회전 경합 — 새로 발견, 수정 보류
 
-   **문제**: 분산락을 거쳐 전체 결제 플로우를 테스트할 때 동시 스레드 수를 올리면 `RuntimeException: Failed to acquire lock`이 발생한다(분산락 `waitTime` 5초 초과). 그래서 이전 세션에서는 `PaymentIdempotencyConcurrencyIntegrationTest`의 `ATTEMPT_COUNT`를 2로 낮춰 임시로 안정화해뒀다.
+- **상태**: Accepted(보류 확정) — **사용자 결정: 지금은 고치지 않고 기록만 해두며, 처리는 나중으로
+  미룬다**. (ADR-5와 달리 이번 추가 보완의 범위에는 포함하지 않기로 확정했다.)
+- **맥락**: 전면 재점검(§1) 중 `MemberAuthService.refresh()`에서 새로 발견했다. 돈·재고 영향은
+  없으나 세션(로그인 상태)에 영향이 있다.
+- **결정**: 수정하지 않고 테스트로 현재 동작을 고정한다. §8 후속 과제에 남겨 다음 세션에서 우선순위를
+  다시 판단한다.
+- **결과**: 장점 — 범위를 벗어나는 수정을 섣불리 하지 않았고, 이번 세션은 ADR-7(승격 원자화)에
+  집중할 수 있었다. 단점 — 실제 서비스에서 네트워크 재시도가 흔한 모바일 클라이언트라면 사용자가
+  종종 예기치 않게 로그아웃될 수 있다 — 발생 빈도는 추정이며 측정하지 않았다.
 
-   **원인(코드로 확정, 추정 아님)**: `PaymentFacade.processPayment`는 `@Transactional`(바깥)이고, 그 안의 `lockManager.runWithLock`이 `DistributedLockTransactionProcessor.proceed`(`@Transactional(REQUIRES_NEW)`, 안쪽)를 감싼다. Hibernate는 커넥션을 지연 획득하므로, 바깥 트랜잭션이 실제로 커넥션을 쥐는 시점은 메서드 진입 직후가 아니라 **첫 쿼리가 실행되는 시점**이다 — 그 첫 쿼리가 `PaymentFacade.processPayment` 맨 앞의 `authenticatedMemberReader.resolveMemberId(uuid)`(→ `MemberAuthenticatedMemberReader.resolveMemberId` → `memberRepository.findByUuid`)이고, 이 호출은 분산락을 시도하기 **전에** 일어난다. 즉 같은 예약에 N명이 동시에 결제를 시도하면:
-   - N개 스레드 **모두** 바깥 트랜잭션용 커넥션을 먼저 쥔 채로 Redis 락(`rLock.tryLock`)을 기다린다(DB가 아니라 Redis에서 경합하므로 서로의 커넥션을 막지 않음).
-   - 그중 락을 쥔 **1명만** `DistributedLockTransactionProcessor.proceed`(`REQUIRES_NEW`)로 **같은 풀에서** 커넥션을 1개 더 빌려야 실제 비즈니스 로직(검증·좌석 확정·포인트 차감·결제 저장)을 실행할 수 있다.
-   - 따라서 동시 N건이 몰리는 최악의 경우 필요한 커넥션 수는 N이 아니라 **N+1**이다 — 풀 크기가 N과 같거나 작으면, 락을 쥔 1명이 11번째 커넥션을 못 받아 `connection-timeout`(10초)에 걸리고, 나머지 N-1명은 `waitTime`(5초)에 걸려 `Failed to acquire lock`으로 실패한다. **스레드 수(동시 요청 수)가 풀 크기를 넘거나 같으면 "락 대기"와 "커넥션 대기"가 같은 타이밍에 겹쳐 전체가 타임아웃난다**는 뜻이다.
+### ADR-7. 대기열 승격을 Redis Lua EVAL로 원자화(ADR-5 대체)
 
-   **인프라 근거 조사** (`infra/terraform/`):
-   | 값 | 조사 결과 | 출처 |
-   |---|---|---|
-   | RDS 인스턴스 클래스 | `db.t3.micro` | `infra/terraform/envs/prod/terraform.tfvars`(`db_instance_class`), `infra/terraform/modules/datastore/variables.tf`(default) |
-   | RDS 커스텀 파라미터 그룹 | 없음 — `aws_db_parameter_group` 리소스가 terraform에 없고, `aws rds describe-db-parameter-groups`로도 `default.mysql8.0` 하나만 존재 확인 | terraform 전체 grep + AWS CLI(`--profile ys-admin`) 실측 |
-   | `max_connections` 파라미터 값 | 수식 `{DBInstanceClassMemory/12582880}` (AWS 기본값, 수정 없음) — `aws rds describe-db-parameters --db-parameter-group-name default.mysql8.0`로 ParameterValue 자체는 실측했지만, **이 수식이 실제로 계산되는 숫자(`max_connections`의 최종 값)는 미확인**이다. 현재 RDS 인스턴스와 ECS 클러스터가 모두 중단/삭제된 상태(`aws rds describe-db-instances` → 빈 배열, `aws ecs list-clusters` → 빈 배열)라 `SHOW VARIABLES LIKE 'max_connections'`나 콘솔의 effective 값을 조회할 대상 자체가 없었다. db.t3.micro의 원시 메모리는 1024MiB(`aws ec2 describe-instance-types --instance-types t3.micro`로 실측)이지만, RDS가 수식에 쓰는 `DBInstanceClassMemory`는 원시 메모리보다 작은 내부 상수라 1024MiB로 역산한 상한(≈85)은 과대추정일 수 있다. AWS 공개 자료에서 흔히 인용되는 db.t3.micro 기본값(약 66)은 **이번 세션에서 실측하지 않은 참고치**로만 쓴다 | AWS CLI 실측 + 미확인 사실 명시 |
-   | ECS API 태스크 수 | `api_desired_count = 1` (오토스케일링 없음) | `infra/terraform/envs/prod/terraform.tfvars`, `infra/terraform/modules/ecs-service/variables.tf` |
-   | ECS Worker 태스크 수 | `worker_desired_count = 1` (오토스케일링 없음) | 위와 동일 |
-   | 오토스케일링(`aws_appautoscaling_target` 등) | terraform 어디에도 없음 → desired_count가 곧 현재 인프라의 **최대치** | terraform 전체 grep으로 확인 |
-   | Bastion | 1대(`infra/terraform/modules/bastion`), 운영자가 수동 SSH 접속하는 용도라 상시 커넥션을 차지하지 않음 → 여유치에 포함 | `infra/terraform/main.tf`의 `module "bastion"` |
-
-   **계산**:
-   - 상한: `인스턴스 수(API 1 + Worker 1 = 2) × maximum-pool-size + 여유(수동 접속·마이그레이션 툴 등, 10) ≤ max_connections`. 풀 크기 15를 넣으면 `2×15+10=40`. `max_connections`의 정확한 값은 미확인이지만, 1024MiB 전체를 기준으로 역산한 상한(≈85)이나 공개 참고치(≈66) 어느 쪽과 비교해도 40은 충분히 여유롭다.
-   - 최소 필요치(요청 1건당 최대 커넥션 2개 반영): 동시 결제 목표 N=10(`PaymentIdempotencyConcurrencyIntegrationTest`의 `ATTEMPT_COUNT` 기준) → 위 "N+1" 분석에 따라 **최소 11**.
-   - 결정: **15** (최소 필요치 11에 여유 4를 더함 — 테스트 타이밍 변동, 운영 중 다른 흐름의 동시 접속까지 고려한 보수적 여유). `minimum-idle`은 별도로 설정하지 않았다(HikariCP 기본값이 `maximum-pool-size`와 동일하게 유지되고, 이 프로젝트 규모에서 유휴 커넥션을 더 줄일 필요가 없어 "최소 변경" 원칙에 따라 그대로 둠).
-
-   **실측(RED → GREEN, `PaymentIdempotencyConcurrencyIntegrationTest`의 "같은 예약을 동시에 여러 번 결제" 테스트만, `ATTEMPT_COUNT`를 2→10으로 되돌린 상태에서 매번 `--rerun`으로 재실행)**:
-
-   | 풀 크기 | 스레드 수(N) | 결과 |
-   |---|---|---|
-   | 3 (기존값) | 10 | **RED** — `java.lang.RuntimeException: Failed to acquire lock`로 1개 테스트 실패 (`AssertionError: Collection should be empty but contained ...`) |
-   | 10 (= N, 기본 제안값) | 10 | **RED** — 동일하게 재현됨. 풀 크기가 동시 스레드 수와 같아도 부족하다는 것을 실측으로 확인(위 "N+1" 계산과 일치) |
-   | 11 (= N+1, 이론적 최소) | 10 | **GREEN** — `BUILD SUCCESSFUL` |
-   | 15 (최종 결정값) | 10 | **GREEN** — `BUILD SUCCESSFUL`, 이어서 `./gradlew clean test` 전체 124개 테스트 0 failures로 재확인 |
-
-   **변경 파일**: `src/main/resources/application.yml`(`maximum-pool-size: 3 → 15`), `src/test/java/kr/hhplus/be/server/concurrency/PaymentIdempotencyConcurrencyIntegrationTest.kt`(`ATTEMPT_COUNT: 2 → 10`, 주석도 갱신).
-
-   **후속 검토(근본 대안, 이번엔 범위 밖으로 남김)**: 가장 근본적인 해결은 `PaymentFacade.processPayment`의 바깥 `@Transactional`을 없애거나(혹은 분산락 바깥에서 커넥션을 쥐지 않도록 구조를 바꿔) 요청 1건당 커넥션 사용을 2개가 아니라 1개로 줄이는 것이다. 그러면 풀 크기를 이만큼 여유 있게 잡지 않아도 되고, "바깥 트랜잭션이 락 대기 시간 내내 커넥션을 놀리면서 쥐고 있는" 비효율 자체가 없어진다. 이번 세션에서는 풀 크기 조정만으로 대응했고, 이 구조 변경은 범위 밖으로 남긴다.
-2. **`point.member_id` 외에 유사한 "최초 생성 레이스" 패턴이 다른 도메인에도 있는지**는 전수 조사하지 않았다. 이번엔 포인트 충전에서 실제로 걸려서 발견했을 뿐이다.
-3. **대기열 승격의 멀티 인스턴스 경합**(§5)은 리스트업만 하고 테스트·수정 모두 하지 않았다. 멀티 인스턴스 배포로 전환할 계획이 있다면 우선순위를 올려야 한다.
-4. **회원가입 loginId 중복 시 에러 코드(500 → 409)** 수정이 필요하다면, 결제 멱등성과 동일한 패턴(저장소에서 `DataIntegrityViolationException` → `LoginIdDuplicateException` 변환)으로 쉽게 고칠 수 있다 — 이번엔 "중" 위험도라 범위 밖으로 남겼다.
-5. **`AdmissionPolicy`/`ThresholdAdmissionPolicy` 삭제**: 대기열 정원 로직을 Lua 원자화로 옮기면서 더 이상 쓰이지 않게 돼 삭제했다. 혹시 다른 용도로 남겨두고 싶다면 복원해야 한다(git 이력에 남아있음).
-
----
-
-## 11. 한계
-
-- RED 재현은 git stash로 "이번 세션에서 수정한 프로덕션 코드"만 되돌려 측정했다. 그보다 더 이전 시점(이번 세션 시작 전)의 코드 상태 전체를 별도로 체크아웃해 측정하지는 않았다 — 다만 stash로 되돌린 코드가 정확히 세션 시작 시점(`HEAD`)의 코드와 동일함은 `git status`/`git stash`의 표준 동작으로 보장된다.
-- 결제 멱등성의 "락 leaseTime 초과로 락이 뚫리는" 시나리오는 타이밍 의존적이라 테스트로 강제 재현하지 않았다(이미 handoff에 구조적 위험으로 기록된 내용을 재확인만 함).
-- 대기열 승격의 멀티 인스턴스 경합은 단일 JVM 테스트로는 사실적으로 재현하기 어려워 테스트하지 않았다.
-- 동시성 테스트는 타이밍에 의존하는 특성상 환경에 따라 결과가 달라질 수 있다 — 포인트 "다른 예약 2건 동시 결제" 테스트는 이번 환경에서 재현되지 않았지만, 더 느린(또는 더 빠른) 환경에서는 다를 수 있다. 다만 수정(조건부 UPDATE)은 타이밍과 무관하게 항상 안전하다.
-- **코드 리뷰 MEDIUM 항목 — `INSERT ... ON DUPLICATE KEY UPDATE` 데드락 재현 시도, 재현 안 됨**(`docs/agent/reviews/2026-10-21-concurrency-review.md`): "포인트 행이 없는 신규 회원에게 여러 트랜잭션이 동시에 최초 충전하면, 아직 존재하지 않는 `member_id` 유니크 키를 두고 InnoDB 갭락(gap lock) 경합으로 데드락(에러 1213)이 날 수 있다"는 지적을 `PointUpsertDeadlockReproductionTest`(`src/test/java/kr/hhplus/be/server/concurrency/`, `@Tag("perf")`로 분리 — 기본 `./gradlew test`에는 포함되지 않고 `./gradlew perfTest`로만 실행됨)로 재현 시도했다.
-  - **시도 조건**: 스레드 수 30/40/50 각각에 대해 신규 회원을 새로 만들어 5회씩 반복(총 15회, 회당 해당 스레드 수만큼 동시 `PointFacade.chargePoint` 호출). 결제 분산락 테스트에서 이미 드러난 HikariCP `maximum-pool-size: 3` 병목(§10-1)과 "진짜 DB 레벨 동시성"을 구분하기 위해, 이 테스트에서만 `@TestPropertySource`로 풀 크기를 60으로 올려 격리했다(운영 설정은 건드리지 않음).
-  - **결과**: 15회 전부 **재현 안 됨** — 모든 조합(threads=30/40/50 × 5회)에서 100% 성공(0건 실패, 예외 없음)이었다. MySQL 8.0(Testcontainers) + 이 스키마/트랜잭션 패턴에서는 이번 시도 조건으로 데드락이 관찰되지 않았다.
-  - **한계**: 재현 안 됨이 "안전하다"를 증명하지는 않는다 — 더 많은 스레드, 다른 MySQL 버전/설정(바이너리 로그 포맷, 격리 수준 등), 또는 실제 운영 트래픽 패턴에서는 다를 수 있다. 재현되지 않아 대응(재시도 로직 등)은 설계·구현하지 않았다 — 필요해지면 `CannotAcquireLockException`/`DeadlockLoserDataAccessException`을 잡아 짧은 backoff 후 재시도하는 정도로 충분할 것으로 보이나, 실제 구현 여부는 재현 증거가 없는 한 보류한다(메인 세션 판단 대기).
-- **테스트 설계 중 발견한 사실 — JVM 시계와 DB 시계를 섞어 비교하면 플레이키해진다**: `PointRepositoryIntegrationTest`에서 "usePoint 호출 전/후 `updated_at`이 반드시 더 나중이어야 한다"를 검증하려고 처음엔 `fixture.chargePoint()`(JPA `save()` → `@LastModifiedDate` 감사 리스너, JVM 시계)로 초기 잔액을 만들고 `usePoint`(네이티브 `now(6)`, DB 시계)로 비교했는데 실패했다 — 두 값의 시계 출처가 달라, 호스트/Testcontainers 간의 시계 차이만으로도 순서가 뒤바뀔 수 있었다(실측으로 재현). `pointRepository.chargePoint`(역시 네이티브 `now(6)`)로 초기 잔액을 만들도록 바꿔 같은 DB 시계로 통일하자 안정적으로 통과했다. 프로덕션 코드의 버그는 아니지만(최초 `save()`의 JPA 감사값과 이후 네이티브 쿼리의 DB 시계가 섞여 있다는 사실 자체는 이번 수정 범위 밖), 시계 출처가 다른 타임스탬프를 테스트에서 직접 비교할 때는 주의가 필요하다는 것을 기록해 둔다.
+- **상태**: Accepted (이번 추가 보완 세션)
+- **맥락**: ADR-5에서 "중" 등급으로 분류해 미루기로 했던 대기열 승격 멀티 인스턴스 경합을, 사용자가
+  이번 선택 심화 ②의 범위에 포함하기로 결정했다. `PromoteQueueTokenService`가 `countActive` 조회
+  후 `popWaiting`+`saveActive`를 그대로 호출하는 check-then-act라서, 발급 정원(ADR-3)과 달리
+  원자화돼 있지 않았다 — 정원 5·인스턴스 10개로 RED 재현 시 활성 인원이 50명(정원의 10배)까지
+  늘었다(§4.4).
+- **결정**: `ActiveQueueRepository.promote(scheduleId, capacity, admissionRatePerTick,
+  candidateTokens)`를 추가해 "남은 슬롯 계산(ZCOUNT) → 대기열에서 꺼내기(ZPOPMIN) → 활성
+  등록(SADD+ZADD+SET+heartbeat 삭제)"을 Redis Lua EVAL 하나로 묶었다(ADR-3과 같은 원자화
+  패턴을 승격까지 확장). Lua 안에서는 새 토큰(UUID)을 만들 수 없어, `PromoteQueueTokenService`가
+  이번 tick에서 최대로 승격 가능한 인원(`admissionRatePerTick`)만큼 신규 활성 토큰 후보를 미리
+  만들어 인자로 전달하고, Lua는 실제로 쓸 만큼만 앞에서부터 소비한다. 더 이상 쓰이지 않게 된
+  `WaitingQueueRepository.popWaiting`은 ADR-3의 `AdmissionPolicy` 삭제와 같은 원칙으로 삭제했고,
+  두 저장소가 공유해야 하는 Redis 키 포맷은 `QueueRedisKeys` 객체로 모았다.
+- **결과**:
+  - 장점 — 애플리케이션 레벨 분산락 없이도 멀티 인스턴스 승격의 원자성을 확보했다(RED
+    `expected:<5L> but was:<50L>` → GREEN 정확히 정원만큼만 승격). 발급 정원(ADR-3)과 같은 방식
+    (Lua)이라 대기열 도메인 전체의 동시성 전략이 일관된다.
+  - 단점 — Lua가 두 저장소(활성/대기열)의 키 포맷을 모두 알아야 해서 결합이 늘었다
+    (`QueueRedisKeys`로 완화했지만 완전히 없어지지는 않는다). `GenericJackson2JsonRedisSerializer`가
+    문자열 값을 쌍따옴표로 감싸는 탓에, Lua 안에서 새 키 이름을 조립할 때 쌍따옴표를 벗겨 평문을
+    복원해야 한다(§4.4) — 처음에는 `string.sub`으로 앞뒤 쌍따옴표만 잘라내 "uuid에 JSON 이스케이프가
+    필요한 문자가 없다"는 전제에 의존했으나, 코드 리뷰(MEDIUM)를 반영해 Redis Lua 내장
+    `cjson.decode`로 교체해 그 전제 자체를 없앴다 — 이제는 uuid 포맷이 바뀌거나 이스케이프가
+    필요한 문자가 들어와도 항상 올바른 평문으로 복원된다.
 
 ---
 
-## 12. 코드 리뷰 반영 요약
+## 8. 적용 현황과 후속 과제
 
-- **대상**: `docs/agent/reviews/2026-10-21-concurrency-review.md` (판정 WARNING, CRITICAL 0 · HIGH 1 · MEDIUM 4 · LOW 2).
-- **반영 내역**:
-  - HIGH — `point.member_id` UNIQUE의 운영 반영 위험: §4.1에 배포 전 점검 쿼리와 정리 절차(제안)를 추가했다.
-  - MEDIUM — 결제 중복 예외 변환 범위: `payment.reservation_id` 제약에 이름(`uk_payment_reservation_id`)을 부여하고, `PaymentJpaRepository.save()`가 그 제약 위반일 때만 `DuplicatePaymentException`으로 변환하도록 좁혔다(§4.2, 실측한 MySQL 예외 메시지·제약 이름 포맷 포함).
-  - MEDIUM — UPSERT 데드락 재현 시도: 스레드 30/40/50 × 5회(총 15회) 시도했으나 **재현 안 됨**(§11). 대응은 구현하지 않고 제안만 남겼다.
-  - LOW — `usePoint` `updated_at` 미갱신: `chargePoint`와 동일한 네이티브 `now(6)`로 갱신하도록 수정(JPQL `CURRENT_TIMESTAMP`는 정밀도가 달라 1차 시도에서 테스트 실패로 걸러짐).
-  - LOW — 포인트 저장소 단위 검증 부재: `PointRepositoryIntegrationTest` 4건 추가(신규 생성/기존 증가/정상 차감/잔액 부족).
-  - 커넥션 풀(`maximum-pool-size: 3`, §10-1)은 리뷰 당시엔 "사용자 결정 필요"로 남겨뒀던 항목이다 — 이후 사용자 결정에 따라 **15로 변경**하고 근거·실측 결과를 §10-1에 갱신했다(별도 세션, 2026-10-21).
-- **오판 1건과 근거**: 리뷰는 "대기열 재발급 시 TTL 연장 동작이 사라졌다"(MEDIUM)고 지적했지만, 메인 세션이 수정 전(HEAD) `IssueQueueTokenService`를 직접 확인한 결과 수정 전 코드도 활성 토큰이 있으면 기존 토큰을 그대로 반환하고 TTL을 연장하지 않는 동작이었다 — 즉 이번 수정이 "없앤" 동작이 아니라 원래부터 없던 동작이었다. 리뷰어가 코드 읽기·추론만으로(테스트 미실행) 수정 전/후를 비교하다 생긴 오판으로 판단해 별도 조치는 하지 않았다.
-- **변경하지 않은 것**: 좌석 조건부 UPDATE·Redis Lua(기존 리뷰 통과 영역), 대기열 Lua(`tryIssueActive`), 포인트 UPSERT/조건부 UPDATE의 의미 — 모두 그대로 유지했고, 이번엔 예외 변환 범위(§MEDIUM 2)와 `updated_at` 갱신(§LOW 1)만 좁혀서 고쳤다.
+### 운영 반영 절차
+
+- **`payment.reservation_id` UNIQUE**, **`point.member_id` UNIQUE** 모두 prod `ddl-auto: update`
+  환경에서는 기존 중복 데이터가 있으면 제약 생성이 실패한다. 배포 전 아래 점검이 선행돼야 한다.
+  ```sql
+  SELECT reservation_id, COUNT(*) FROM payment GROUP BY reservation_id HAVING COUNT(*) > 1;
+  SELECT member_id, COUNT(*) FROM point GROUP BY member_id HAVING COUNT(*) > 1;
+  ```
+  1건이라도 나오면 제약 배포를 보류하고, 중복 행을 병합(잔액 합산 또는 가장 먼저 생성된 행 유지) ·
+  삭제한 뒤 점검 쿼리로 0건을 재확인하고 배포한다.
+- 이번 세션은 로컬 테스트 스키마(`create-drop`)로만 확인했고, 운영 데이터 중복 여부는 조사하지
+  않았다(권한 없음).
+
+### 코드 리뷰 반영 요약 (2026-10-21, `docs/agent/reviews/2026-10-21-concurrency-review.md`, WARNING — HIGH 1 · MEDIUM 4 · LOW 2)
+
+| 심각도 | 지적 | 반영 |
+|---|---|---|
+| HIGH | `point.member_id` UNIQUE 운영 반영 위험 | 위 점검 쿼리·정리 절차 추가 |
+| MEDIUM(오판) | 대기열 재발급 TTL 연장 동작 소실 | 메인 세션이 HEAD 코드 직접 확인 — 원래부터 없던 동작, 조치 없음 |
+| MEDIUM | UPSERT 데드락 가능성(InnoDB 갭락, 신규 회원 동시 최초 충전) | `PointUpsertDeadlockReproductionTest`(`src/test/.../perf/`, `@Tag("perf")`)로 스레드 30/40/50×5회(총 15회) 재현 시도 — **재현 안 됨**. 이번 보완 세션에서는 해당 파일을 건드리지 않았다(다른 에이전트 작업 영역) |
+| MEDIUM | `PaymentJpaRepository.save()`가 모든 DB 예외를 중복 결제로 변환 | ADR-2로 범위 좁힘 |
+| MEDIUM | Hikari 풀 크기 3 — 동시 2건이면 고갈 | ADR-4로 15로 결정 |
+| LOW | `usePoint`가 `updated_at` 미갱신 | 네이티브 `now(6)`로 갱신 |
+| LOW | 포인트 저장소 단위 검증 부재 | `PointRepositoryIntegrationTest` 4건 추가 |
+
+### 코드 리뷰 반영 요약 (2026-10-23, `docs/agent/reviews/2026-10-23-queue-promote-review.md`, **APPROVE** — CRITICAL 0 · HIGH 0 · MEDIUM 2 · LOW 2)
+
+대상: 대기열 승격(promote) Lua 원자화(ADR-7) — `PromoteQueueTokenService`, `ActiveQueueRepository.promote`,
+`ActiveQueueRedisRepository.PROMOTE_SCRIPT`, `QueueRedisKeys`, `QueueTokenLifecycleConcurrencyIntegrationTest`.
+
+| 심각도 | 지적 | 반영 |
+|---|---|---|
+| MEDIUM | `string.sub`로 쌍따옴표 벗기기가 "uuid에 JSON 이스케이프 문자가 없다"는 전제에 의존 — 지금은 서버가 생성한 UUID라 안전하지만 코드로 강제되지 않고, 전제가 깨지면 예외 없이 승격자가 토큰을 못 찾는다 | `cjson.decode(rawUuid)`로 교체(§4.4) — 전제 자체를 없앴다 |
+| MEDIUM | 승격과 신규 발급이 같은 회차에 동시에 실행될 때 정원 합계를 직접 검증하는 테스트가 없음(Redis Lua 직렬 실행 모델로 추론만 해왔음) | `QueueTokenLifecycleConcurrencyIntegrationTest`에 승격 8스레드 + 신규 발급 8스레드 혼합 실행 테스트 추가(위 "추가 검증" 참고) |
+| LOW | `saveActive`가 프로덕션 호출자 없이 테스트 픽스처 전용 | 의도된 유지(§4.4 본문에 이미 명시) — 조치 없음 |
+| LOW | 테스트의 `remainingSeconds in 1..300`이 TTL 기본값(`activeTokenTtlMs`)에 매직넘버로 의존 | `QueueProperties.activeTokenTtlMs`에서 상한을 계산하도록 교체 |
+
+### 후속 과제 (사용자 결정 대기 순)
+
+1. **대기열 승격 멀티 인스턴스 경합(ADR-5→ADR-7)** — 이번 추가 보완 세션에서 수정 완료(§4.4). 후속
+   과제에서는 제외한다.
+2. **리프레시 토큰 동시 회전 경합(ADR-6)** — 사용자 결정: 지금은 기록만 해두고 처리는 나중으로
+   미룬다. 다시 우선순위를 매길 때 그레이스 기간 또는 uuid별 분산락 적용 여부를 결정한다.
+3. 회원가입 loginId 에러 코드(500→409) — 결제 멱등성과 동일한 패턴으로 쉽게 고칠 수 있음(§5).
+4. `point.member_id` 외 유사한 "최초 생성 레이스" 패턴이 다른 도메인에도 있는지 전수 조사되지 않음.
+5. 대기열 만료-발급 북키핑 경합(§3 #15) — 재현되지 않았지만 Lua 원자화로 근본적으로 닫을 수 있음.
+6. `AdmissionPolicy`/`ThresholdAdmissionPolicy` 삭제 — 다른 용도로 필요하면 git 이력에서 복원 가능.
+
+---
+
+## 9. 한계
+
+- RED 재현(§4)은 git stash로 "그 세션에서 수정한 프로덕션 코드"만 되돌려 측정했다.
+- 결제 멱등성의 "락 leaseTime(3초) 초과로 락이 뚫리는" 시나리오는 타이밍 의존적이라 테스트로 강제
+  재현하지 않았다(handoff에 기록된 구조적 위험을 재확인만 함).
+- **대기열 승격 멀티 인스턴스 경합은 이번에 실측했다**(정원 5 → 활성 50명). 다만 이 수치는
+  스레드 스케줄링 타이밍에 따라 환경마다 달라질 수 있어, 테스트에 상한 assertion을 걸지 않고
+  "승격은 반드시 일어난다"만 Rule로 고정했다 — 과대/과소 재현 가능성 모두 있다.
+- **대기열 만료-발급 북키핑 경합(§3 #15)은 100회 반복 중 재현되지 않았다.** 재현 안 됨이 "안전함"을
+  증명하지는 않는다 — 타이밍 창이 매우 좁아(비원자적 2단계 사이의 간극) 일반 CPU 환경에서는 거의
+  열리지 않는 것으로 보인다. 더 많은 반복, 다른 하드웨어, 실제 운영 트래픽 패턴에서는 다를 수 있다.
+- **리프레시 토큰 회전 경합(§3 #16)은 두 토큰이 같은 밀리초에 발급되면**(JJWT의 `issuedAt`이
+  밀리초 단위) 우연히 동일한 문자열이 되어 손실이 눈에 보이지 않을 수 있다 — 테스트는 이 경우를
+  감지해 건너뛰도록 작성했지만, 실제 운영에서도 이 희귀 케이스에서는 레이스의 영향이 가려진다.
+- 동시성 테스트는 타이밍에 의존하는 특성상 환경에 따라 결과가 달라질 수 있다 — 포인트 "다른
+  예약 2건 동시 결제" 테스트는 이번 환경에서 재현되지 않았지만, 더 느린(또는 빠른) 환경에서는
+  다를 수 있다. 수정(조건부 UPDATE) 자체는 타이밍과 무관하게 항상 안전하다.
+- **UPSERT 데드락 재현 시도(코드 리뷰 MEDIUM)는 이전 세션에서 15회 전부 재현 안 됨**으로
+  기록돼 있다(`PointUpsertDeadlockReproductionTest`, `src/test/.../perf/`). 이번 보완 세션에서는
+  해당 디렉터리를 다른 에이전트가 작업 중이라 건드리지 않았고, 새로 재검증하지도 않았다 — 기존
+  기록을 그대로 인용한다.
+- JVM 시계와 DB 시계를 섞어 비교하면 플레이키해진다는 것을 `PointRepositoryIntegrationTest` 설계
+  중 실측으로 발견했다(이전 세션) — 같은 DB 시계(네이티브 `now(6)`)로 통일해 해결했다. 프로덕션
+  버그는 아니다.
+
+---
+
+## 부록
+
+### 테스트 파일 목록
+
+**동시성 테스트 (`src/test/java/kr/hhplus/be/server/concurrency/`)**
+
+| 파일 | 테스트 수 | 비고 |
+|---|---:|---|
+| `PointConcurrencyIntegrationTest.kt` | 3 | 충전 / 다른 예약 2건 결제 / 충전+차감 혼합(이번 보완 1건 추가) |
+| `PaymentIdempotencyConcurrencyIntegrationTest.kt` | 3 | 락 경유(직렬화) / 락 우회 순차 / 락 우회 10동시 |
+| `QueueCapacityConcurrencyIntegrationTest.kt` | 2 | 정원 초과 방지 / 같은 사용자 중복 방지 |
+| `MemberLoginIdConcurrencyIntegrationTest.kt` | 1 | loginId 중복 가입(현재 동작 고정) |
+| `QueueTokenLifecycleConcurrencyIntegrationTest.kt` | 5 | **신규**: 승격 멀티 인스턴스 / 승격 토큰 조회·북키핑 정리 / 반납-검증 / 만료-발급 북키핑 / **이번 추가**: 승격·신규발급 혼합 실행(정원 준수) |
+| `RefreshTokenRotationConcurrencyIntegrationTest.kt` | 1 | **신규(새로 발견)**: 리프레시 토큰 동시 회전 |
+| `PointUpsertDeadlockReproductionTest.kt` | — | `src/test/.../perf/`가 아닌 `concurrency/`에 위치하지만 `@Tag("perf")`로 기본 실행 제외. 이번 세션 미수정 |
+
+**연관 테스트(이미 존재, 이번에 리스트업 표에 새로 연결)**
+
+- `src/test/java/kr/hhplus/be/server/integration/ConcurrentSeatReservationIntegrationTest.kt`
+- `src/test/java/kr/hhplus/be/server/domains/seat/infrastructure/persistence/SeatRepositoryIntegrationTest.kt`
+- `src/test/java/kr/hhplus/be/server/domains/seat/infrastructure/redis/SeatHoldRedisRepositoryIntegrationTest.kt`
+- `src/test/java/kr/hhplus/be/server/integration/PaymentFailureRollbackIntegrationTest.kt`
+
+### 변경 파일 목록 (이번 보완 세션 + 코드 리뷰 반영 추가 작업)
+
+```
+src/main/kotlin/kr/hhplus/be/server/domains/queue/infrastructure/redis/ActiveQueueRedisRepository.kt
+    (PROMOTE_SCRIPT의 string.sub 쌍따옴표 벗기기 → cjson.decode로 교체, 코드 리뷰 MEDIUM 반영)
+src/test/java/kr/hhplus/be/server/concurrency/PointConcurrencyIntegrationTest.kt        (테스트 1개 추가)
+src/test/java/kr/hhplus/be/server/concurrency/QueueTokenLifecycleConcurrencyIntegrationTest.kt
+    (신규 4개 + 코드 리뷰 반영으로 "승격·신규발급 혼합 실행" 1개 추가(총 5개),
+     remainingSeconds 상한 매직넘버(300) → QueueProperties.activeTokenTtlMs 계산으로 교체)
+src/test/java/kr/hhplus/be/server/concurrency/RefreshTokenRotationConcurrencyIntegrationTest.kt (신규, 1개)
+docs/report/step4-concurrency-report.md   (이 문서 — §4.4 cjson 반영, 혼합 실행 결과, 부록 갱신)
+docs/report/step4-index-report.md         (§2에 perfTest 재현 범위 문단 추가)
+```
+
+이번 코드 리뷰 반영 작업에서는 `ActiveQueueRedisRepository.kt`의 Lua 스크립트 1곳만 프로덕션
+코드를 변경했다(동작 자체는 바뀌지 않고 우회 전제를 없애는 방어적 수정). 그 이전 "대기열 토큰
+생명주기" 보완 세션은 리스트업 재점검과 테스트 보강만 수행했다(프로덕션 코드 변경 없음).
+
+### 실행 결과
+
+- `./gradlew clean test` 전체(코드 리뷰 반영 후 재측정): **129개 테스트, 0 failures, 0 errors**
+  (이전 보완 세션 128개 + 이번에 추가한 "승격·신규발급 혼합 실행" 1개).
+- 동시성 패키지(`concurrency/*`, perf 태그 제외) 전체: **15개 테스트, 약 2.75초**
+  (`MemberLoginIdConcurrencyIntegrationTest` 0.19s, `PaymentIdempotencyConcurrencyIntegrationTest` 0.69s,
+  `PointConcurrencyIntegrationTest` 0.67s, `QueueCapacityConcurrencyIntegrationTest` 0.19s,
+  `QueueTokenLifecycleConcurrencyIntegrationTest` 0.88s(5개), `RefreshTokenRotationConcurrencyIntegrationTest` 0.14s).
+- 실측 println 로그(`QueueTokenLifecycleConcurrencyIntegrationTest` 재실행 결과에서 그대로 인용,
+  승격 멀티 인스턴스 테스트는 ADR-7 수정 후 상태라 RED가 아니라 GREEN 값만 남는다 — RED 원본
+  수치는 위 표 §4.4 참고):
+  ```
+  [실측] 대기자 승격 멀티 인스턴스 경합(Lua 원자화 후): 정원=5, 인스턴스=10, 실제 활성 인원=5, 승격된 대기자 수=5, 아직 대기 중인 대기자 수=45
+  [실측] 승격 vs 신규 발급 혼합 경합: 정원=5, 승격 인스턴스=8, 신규 발급=8, 실제 활성 인원=5, 승격으로 채워진 인원=5, 신규 발급으로 채워진 인원=0
+  [실측] 토큰 반납 vs 검증 경합: 50 회 중 검증 성공=11, QueueTokenInvalidException=39
+  [실측] 만료 정리 vs 발급 경합(스케줄 북키핑): 100 회 반복 중 활성 인원이 있는데 스케줄 목록에서 빠진 횟수 = 0
+  ```
+- `ConcurrentSeatReservationIntegrationTest`(필수 ③)는 약 10.3초로 변동 없음(이전 세션 기록, 이번에
+  재측정하지 않음 — 코드 변경 없음).

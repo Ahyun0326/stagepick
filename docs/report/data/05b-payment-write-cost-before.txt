@@ -1,0 +1,5 @@
+rowsToInsert=20000 reps=3
+rep1=650.7ms
+rep2=682.1ms
+rep3=590.5ms
+median=650.7ms

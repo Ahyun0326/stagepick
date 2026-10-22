@@ -1,0 +1,17 @@
+SQL: SELECT * FROM seat WHERE reservation_id = 777
+
+--- EXPLAIN ---
+table=seat type=ref key=idx_reservation_id rows=2 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.023200ms
+rep2 = 0.005790ms
+rep3 = 0.006830ms
+rep4 = 0.004330ms
+rep5 = 0.004830ms
+median = 0.005790ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Index lookup on seat using idx_reservation_id (reservation_id=777)  (cost=2.2 rows=2) (actual time=0.0225..0.0232 rows=2 loops=1)
+
+

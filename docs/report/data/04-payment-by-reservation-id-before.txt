@@ -1,0 +1,18 @@
+SQL: SELECT * FROM payment WHERE reservation_id = 777
+
+--- EXPLAIN ---
+table=payment type=ALL key=null rows=98325 filtered=10.0 Extra=Using where
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 53.200000ms
+rep2 = 40.500000ms
+rep3 = 45.400000ms
+rep4 = 50.600000ms
+rep5 = 38.900000ms
+median = 45.400000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Filter: (payment.reservation_id = 777)  (cost=11596 rows=9833) (actual time=0.498..53.2 rows=1 loops=1)
+    -> Table scan on payment  (cost=11596 rows=98325) (actual time=0.0785..50 rows=100000 loops=1)
+
+

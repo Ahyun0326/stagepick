@@ -1,0 +1,14 @@
+SQL: UPDATE seat SET status='AVAILABLE', reservation_id=NULL WHERE id IN (450004,450005,450006) AND status='HOLD'
+
+--- EXPLAIN ---
+table=seat type=range key=PRIMARY rows=3 filtered=100.0 Extra=Using where
+
+--- wall-clock 반복 5회 (ms) ---
+rep1=2.931667ms
+rep2=2.227000ms
+rep3=2.746250ms
+rep4=2.470834ms
+rep5=2.788375ms
+median=2.746250ms
+
+참고: MySQL 8.0.46 `EXPLAIN ANALYZE UPDATE ...` 는 "not executable by iterator executor" 로 거부되어 EXPLAIN(계획)만 수집하고 시간은 System.nanoTime() 으로 직접 측정했다 (실측 확인됨).

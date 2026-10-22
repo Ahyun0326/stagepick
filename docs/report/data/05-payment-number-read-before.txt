@@ -1,0 +1,17 @@
+SQL: SELECT * FROM payment WHERE number = 'P00000000000777'
+
+--- EXPLAIN ---
+table=payment type=const key=UK60kxdvnm4uoig1o1wwnd6j6f3 rows=1 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.000083ms
+rep2 = 0.000084ms
+rep3 = 0.000124ms
+rep4 = 0.000084ms
+rep5 = 0.000041ms
+median = 0.000084ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Rows fetched before execution  (cost=0..0 rows=1) (actual time=83e-6..83e-6 rows=1 loops=1)
+
+

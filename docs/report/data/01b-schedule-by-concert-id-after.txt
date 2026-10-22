@@ -1,0 +1,17 @@
+SQL: SELECT * FROM schedules WHERE concert_id = 500
+
+--- EXPLAIN ---
+table=schedules type=ref key=idx_concert_id_concerted_at rows=5 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.021200ms
+rep2 = 0.006040ms
+rep3 = 0.006000ms
+rep4 = 0.007080ms
+rep5 = 0.005330ms
+median = 0.006040ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Index lookup on schedules using idx_concert_id_concerted_at (concert_id=500)  (cost=1.75 rows=5) (actual time=0.0203..0.0212 rows=5 loops=1)
+
+

@@ -15,9 +15,19 @@ object ReportWriter {
     private val dir = File(System.getProperty("user.dir"), "docs/report/data").apply { mkdirs() }
     private val summaryFile = File(dir, "summary.csv")
 
+    // perfTest 태스크 한 번 실행(=JVM 프로세스 한 번) 안에서 여러 perf 테스트 클래스
+    // (IndexPerfTest, TableRedesignPerfTest, UpcomingQueriesPerfTest)가 같은 summary.csv에 이어 쓴다.
+    // 클래스 실행 순서는 JUnit이 보장하지 않으므로, "가장 먼저 호출된 쪽"만 헤더를 새로 쓰고
+    // 그 뒤로는 모두 append만 하도록 멱등성을 둔다 — 그렇지 않으면 나중에 실행된 클래스의
+    // resetSummary가 앞서 쓴 다른 클래스의 결과를 지워버린다.
+    @Volatile
+    private var freshForThisRun = false
+
     @Synchronized
-    fun resetSummary() {
+    fun ensureFreshSummary() {
+        if (freshForThisRun) return
         summaryFile.writeText("scenario,phase,table,type,key,rows,filtered,extra,median_ms,reps,note\n")
+        freshForThisRun = true
     }
 
     @Synchronized

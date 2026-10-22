@@ -1,0 +1,19 @@
+SQL: SELECT id, title, location, first_concerted_at, last_concerted_at FROM bench_concert_paging_large WHERE id > 99960 ORDER BY id LIMIT 20
+
+--- EXPLAIN ---
+table=bench_concert_paging_large type=range key=PRIMARY rows=40 filtered=100.0 Extra=Using where
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.006920ms
+rep2 = 0.007420ms
+rep3 = 0.006290ms
+rep4 = 0.007000ms
+rep5 = 0.006620ms
+median = 0.006920ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Limit: 20 row(s)  (cost=8.27 rows=20) (actual time=0.00267..0.00692 rows=20 loops=1)
+    -> Filter: (bench_concert_paging_large.id > 99960)  (cost=8.27 rows=40) (actual time=0.00258..0.00625 rows=20 loops=1)
+        -> Index range scan on bench_concert_paging_large using PRIMARY over (99960 < id)  (cost=8.27 rows=40) (actual time=0.00237..0.00533 rows=20 loops=1)
+
+

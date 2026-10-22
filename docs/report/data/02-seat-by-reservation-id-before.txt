@@ -1,0 +1,18 @@
+SQL: SELECT * FROM seat WHERE reservation_id = 777
+
+--- EXPLAIN ---
+table=seat type=ALL key=null rows=498992 filtered=10.0 Extra=Using where
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 123.000000ms
+rep2 = 109.000000ms
+rep3 = 107.000000ms
+rep4 = 101.000000ms
+rep5 = 110.000000ms
+median = 109.000000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Filter: (seat.reservation_id = 777)  (cost=52303 rows=49899) (actual time=0.396..123 rows=2 loops=1)
+    -> Table scan on seat  (cost=52303 rows=498992) (actual time=0.157..110 rows=500000 loops=1)
+
+

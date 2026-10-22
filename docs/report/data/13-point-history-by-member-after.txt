@@ -1,0 +1,18 @@
+SQL: SELECT * FROM point_history WHERE member_id = 777 ORDER BY created_at DESC LIMIT 20
+
+--- EXPLAIN ---
+table=point_history type=ref key=idx_member_id_created_at rows=3 filtered=100.0 Extra=Backward index scan
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.030000ms
+rep2 = 0.008170ms
+rep3 = 0.007750ms
+rep4 = 0.007290ms
+rep5 = 0.011300ms
+median = 0.008170ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Limit: 20 row(s)  (cost=3.3 rows=3) (actual time=0.026..0.03 rows=3 loops=1)
+    -> Index lookup on point_history using idx_member_id_created_at (member_id=777) (reverse)  (cost=3.3 rows=3) (actual time=0.0255..0.0293 rows=3 loops=1)
+
+

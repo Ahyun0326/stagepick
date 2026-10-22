@@ -1,0 +1,6 @@
+rowsToInsert=2000 reps=3 (회차 INSERT만, 단건 커밋 없음=autocommit 기본)
+rep1=2131.2ms
+rep2=2485.9ms
+rep3=2075.4ms
+median=2131.2ms
+per-row=1.0656ms

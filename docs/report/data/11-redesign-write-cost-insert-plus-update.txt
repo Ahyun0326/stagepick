@@ -1,0 +1,6 @@
+rowsToInsert=2000 reps=3 (회차 INSERT + concert.first/last_concerted_at UPDATE)
+rep1=3543.7ms
+rep2=2799.4ms
+rep3=3501.3ms
+median=3501.3ms
+per-row=1.7506ms

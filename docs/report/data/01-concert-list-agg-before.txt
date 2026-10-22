@@ -1,0 +1,23 @@
+SQL: SELECT c.id, c.title, c.location, MIN(s.concerted_at), MAX(s.concerted_at) FROM concert c LEFT JOIN schedules s ON c.id = s.concert_id GROUP BY c.id, c.title, c.location
+
+--- EXPLAIN ---
+table=c type=ALL key=null rows=1000 filtered=100.0 Extra=Using temporary
+table=s type=ALL key=null rows=9976 filtered=100.0 Extra=Using where; Using join buffer (hash join)
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 10.000000ms
+rep2 = 6.690000ms
+rep3 = 6.880000ms
+rep4 = 6.160000ms
+rep5 = 6.950000ms
+median = 6.880000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Table scan on <temporary>  (actual time=9.82..10 rows=1000 loops=1)
+    -> Aggregate using temporary table  (actual time=9.82..9.82 rows=1000 loops=1)
+        -> Left hash join (s.concert_id = c.id)  (cost=997992 rows=9.98e+6) (actual time=3.64..4.59 rows=10000 loops=1)
+            -> Table scan on c  (cost=106 rows=1000) (actual time=0.483..0.809 rows=1000 loops=1)
+            -> Hash
+                -> Table scan on s  (cost=1.39 rows=9976) (actual time=0.304..2.5 rows=10000 loops=1)
+
+

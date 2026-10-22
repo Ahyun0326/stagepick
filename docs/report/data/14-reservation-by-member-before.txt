@@ -1,0 +1,19 @@
+SQL: SELECT * FROM reservation WHERE member_id = 777 ORDER BY id DESC LIMIT 20
+
+--- EXPLAIN ---
+table=reservation type=index key=PRIMARY rows=20 filtered=10.0 Extra=Using where; Backward index scan
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 44.100000ms
+rep2 = 34.700000ms
+rep3 = 35.400000ms
+rep4 = 35.200000ms
+rep5 = 34.300000ms
+median = 35.200000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Limit: 20 row(s)  (cost=1.89 rows=2) (actual time=22.2..44.1 rows=2 loops=1)
+    -> Filter: (reservation.member_id = 777)  (cost=1.89 rows=2) (actual time=22.2..44.1 rows=2 loops=1)
+        -> Index scan on reservation using PRIMARY (reverse)  (cost=1.89 rows=20) (actual time=0.0553..39.6 rows=200000 loops=1)
+
+

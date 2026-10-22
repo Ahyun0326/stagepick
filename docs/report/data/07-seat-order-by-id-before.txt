@@ -1,0 +1,18 @@
+SQL: SELECT * FROM seat WHERE schedule_id = 5000 ORDER BY id
+
+--- EXPLAIN ---
+table=seat type=ref key=uk_schedule_id_number rows=50 filtered=100.0 Extra=Using filesort
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 0.506000ms
+rep2 = 0.066000ms
+rep3 = 0.079200ms
+rep4 = 0.036400ms
+rep5 = 0.032000ms
+median = 0.066000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Sort: seat.id  (cost=55 rows=50) (actual time=0.504..0.506 rows=50 loops=1)
+    -> Index lookup on seat using uk_schedule_id_number (schedule_id=5000)  (cost=55 rows=50) (actual time=0.239..0.259 rows=50 loops=1)
+
+

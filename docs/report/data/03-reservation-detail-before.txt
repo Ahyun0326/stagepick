@@ -1,0 +1,25 @@
+SQL: SELECT seat.reservation_id, concert.title, concert.location, schedules.viewing_time, schedules.concerted_at, seat.number, seat.price FROM seat INNER JOIN schedules ON seat.schedule_id = schedules.schedule_id INNER JOIN concert ON schedules.concert_id = concert.id WHERE seat.reservation_id = 777
+
+--- EXPLAIN ---
+table=seat type=ALL key=null rows=498992 filtered=10.0 Extra=Using where
+table=schedules type=eq_ref key=PRIMARY rows=1 filtered=100.0 Extra=Using where
+table=concert type=eq_ref key=PRIMARY rows=1 filtered=100.0 Extra=null
+
+--- EXPLAIN ANALYZE 반복 5회 (ms, 전체 쿼리 최상위 노드 actual time 종료값) ---
+rep1 = 97.400000ms
+rep2 = 86.700000ms
+rep3 = 87.300000ms
+rep4 = 88.500000ms
+rep5 = 85.300000ms
+median = 87.300000ms
+
+--- EXPLAIN ANALYZE 원문 (1회차) ---
+-> Nested loop inner join  (cost=154740 rows=49899) (actual time=0.494..97.4 rows=2 loops=1)
+    -> Nested loop inner join  (cost=106088 rows=49899) (actual time=0.476..97.4 rows=2 loops=1)
+        -> Filter: ((seat.reservation_id = 777) and (seat.schedule_id is not null))  (cost=52070 rows=49899) (actual time=0.452..97.4 rows=2 loops=1)
+            -> Table scan on seat  (cost=52070 rows=498992) (actual time=0.177..81.4 rows=500000 loops=1)
+        -> Filter: (schedules.concert_id is not null)  (cost=0.983 rows=1) (actual time=0.012..0.012 rows=1 loops=2)
+            -> Single-row index lookup on schedules using PRIMARY (schedule_id=seat.schedule_id)  (cost=0.983 rows=1) (actual time=0.0117..0.0117 rows=1 loops=2)
+    -> Single-row index lookup on concert using PRIMARY (id=schedules.concert_id)  (cost=0.875 rows=1) (actual time=0.00875..0.00879 rows=1 loops=2)
+
+
