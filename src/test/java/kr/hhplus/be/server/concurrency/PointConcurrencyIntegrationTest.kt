@@ -85,10 +85,38 @@ class PointConcurrencyIntegrationTest : IntegrationTestBase() {
         actual shouldBe expected
     }
 
+    @Test
+    fun `같은 회원이 충전과 결제(차감)를 동시에 수행해도 최종 잔액은 충전-차감 합계와 일치한다`() {
+        // given - 회원 1명, 서로 다른 예약 PAYMENT_COUNT건(결제 락 키가 서로 달라 보호되지 않음),
+        // 모든 결제를 감당할 수 있는 초기 포인트
+        val member = fixture.createMember()
+        fixture.chargePoint(member.id!!, INITIAL_BALANCE)
+
+        val paymentRequests = (1..PAYMENT_COUNT).map {
+            val (scheduleId, seatIds) = fixture.createScheduleWithSeats(1, SEAT_PRICE)
+            val reservationId =
+                reservationFacade.reserveSeat(member.uuid, ReservationRequest(scheduleId, seatIds)).reservationId
+            PaymentRequest(reservationId, SEAT_PRICE, scheduleId)
+        }
+
+        val chargeTasks = (1..CHARGE_COUNT).map { { pointFacade.chargePoint(member.uuid, ChargePointRequest(CHARGE_AMOUNT)) } }
+        val paymentTasks = paymentRequests.map { request -> { paymentFacade.processPayment(member.uuid, request) } }
+
+        // when - 충전(+)과 결제 차감(-)을 같은 순간에 수행 (충전은 락 없음, 결제는 예약 단위 락이라
+        // 서로를 보호하지 못한다 — 둘 다 결국 같은 point 행을 조건부 UPDATE/UPSERT로 두드린다)
+        runConcurrently(chargeTasks + paymentTasks) { it() }
+
+        // then - 잔액은 "초기값 + 충전 합계 - 결제 합계"와 정확히 같아야 한다
+        val expected = INITIAL_BALANCE + CHARGE_COUNT * CHARGE_AMOUNT - PAYMENT_COUNT * SEAT_PRICE
+        val actual = pointRepository.findPointByMemberId(member.id!!).get().point
+        actual shouldBe expected
+    }
+
     companion object {
         private const val CHARGE_COUNT = 15
         private const val CHARGE_AMOUNT = 1_000
         private const val INITIAL_BALANCE = 1_000_000
         private const val SEAT_PRICE = 50_000
+        private const val PAYMENT_COUNT = 5
     }
 }
